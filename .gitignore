@@ -1,0 +1,15 @@
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+data/*
+!data/audio/
+data/audio/*
+!data/audio/.gitkeep
+output/
+*.log
+__pycache__/
+.pytest_cache/
+.coverage
+.env.*
+!.env.example
+.env
