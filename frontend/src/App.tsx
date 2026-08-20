@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AudioLines,
+  CalendarDays,
   Check,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleHelp,
   FlaskConical,
@@ -14,10 +17,14 @@ import {
   EyeOff,
   FileAudio,
   FileText,
+  FolderOpen,
   Gauge,
+  HardDrive,
   KeyRound,
   Library,
+  ListChecks,
   Mic2,
+  Pause,
   Plus,
   Play,
   Radio,
@@ -100,6 +107,55 @@ type Job = {
   audio_available?: boolean;
   audio_url?: string | null;
   text_url?: string | null;
+  audio_cleaned_at?: string | null;
+  audio_cleanup_reason?: string | null;
+};
+type StoragePolicy = {
+  automatic_enabled: boolean;
+  retention_days: number;
+  capacity_limit_bytes: number;
+  interval: "daily" | "weekly";
+  cleanup_scope: "audio_only" | "jobs";
+  updated_at: string;
+};
+type StorageUsage = {
+  job_count: number;
+  audio_count: number;
+  audio_bytes: number;
+  directory_file_count: number;
+  directory_bytes: number;
+  unmanaged_bytes: number;
+  missing_audio_count: number;
+  oldest_audio_at?: string | null;
+  capacity_ratio: number;
+};
+type CleanupRun = {
+  id: string;
+  trigger: "manual" | "automatic";
+  status: string;
+  files_removed: number;
+  jobs_removed: number;
+  jobs_preserved: number;
+  bytes_freed: number;
+  completed_at: string;
+  message: string;
+};
+type StorageStatus = {
+  policy: StoragePolicy;
+  usage: StorageUsage;
+  next_cleanup_at?: string | null;
+  cleanup_history: CleanupRun[];
+  storage_path: string;
+};
+type CleanupPreview = {
+  file_count: number;
+  job_count: number;
+  jobs_preserved: number;
+  bytes_before: number;
+  bytes_to_free: number;
+  bytes_after: number;
+  retention_cutoff: string;
+  cleanup_scope: "audio_only" | "jobs";
 };
 type Gateway = {
   enabled: boolean;
@@ -197,6 +253,9 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
 
 export default function App() {
   const [active, setActive] = useState("synthesize");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    window.localStorage.getItem("voice-studio.sidebar-collapsed") === "true",
+  );
   const [voices, setVoices] = useState<Voice[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -219,6 +278,12 @@ export default function App() {
     () => voices.find((item) => item.public_name === voice),
     [voices, voice],
   );
+  useEffect(() => {
+    window.localStorage.setItem(
+      "voice-studio.sidebar-collapsed",
+      String(sidebarCollapsed),
+    );
+  }, [sidebarCollapsed]);
   useEffect(() => {
     Promise.all([
       api<Voice[]>("/api/voices"),
@@ -366,29 +431,52 @@ export default function App() {
     setNotice(created.message);
     return created.voice;
   };
+  const useVoice = (item: Voice) => {
+    const compatibleModel = models.find(
+      (modelItem) =>
+        modelItem.operations.includes("synthesis") &&
+        modelItem.provider === item.provider &&
+        (modelItem.mode === "demo" ||
+          modelItem.provider === "minimax" ||
+          modelItem.model_id === item.model_id),
+    );
+    if (!compatibleModel) {
+      setNotice(`没有找到与“${item.display_name}”兼容的语音合成模型`);
+      return;
+    }
+    setModel(compatibleModel.gateway_id);
+    setVoice(item.public_name);
+    setNotice(`已选择音色“${item.display_name}”`);
+    setActive("synthesize");
+  };
   const nav = [
     { id: "synthesize", label: "合成工作台", icon: AudioLines },
     { id: "voices", label: "音色库", icon: Library },
     { id: "clone", label: "声音克隆", icon: Mic2 },
-    { id: "design", label: "Voice Design", icon: WandSparkles },
+    { id: "design", label: "声音设计", icon: WandSparkles },
     { id: "gateway", label: "API 网关", icon: Code2 },
     { id: "history", label: "任务历史", icon: Clock3 },
     { id: "settings", label: "设置", icon: Settings2 },
   ];
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
+      <aside className="sidebar" aria-label="主导航">
         <div className="brand">
           <div className="brand-orbit">
             <AudioLines size={18} />
           </div>
           <div>
             <strong>VOICE / STUDIO</strong>
-            <span>local gateway</span>
           </div>
-        </div>
-        <div className="workspace-label">
-          工作区 <span>LOCAL</span>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            title={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+            aria-label={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+          >
+            {sidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          </button>
         </div>
         <nav>
           {nav.map((item) => {
@@ -398,6 +486,8 @@ export default function App() {
                 className={active === item.id ? "nav-item active" : "nav-item"}
                 onClick={() => setActive(item.id)}
                 key={item.id}
+                title={sidebarCollapsed ? item.label : undefined}
+                aria-label={item.label}
               >
                 <Icon size={17} />
                 <span>{item.label}</span>
@@ -408,33 +498,10 @@ export default function App() {
             );
           })}
         </nav>
-        <div className="sidebar-foot">
-          <div className="connection">
-            <span className="live-dot" />
-            <span>本地服务在线</span>
-            <small>8765</small>
-          </div>
-          <div className="build">MVP 0.5.0 · Multi-provider</div>
-        </div>
       </aside>
       <main className="main-area">
         <header className="topbar">
-          <div>
-            <div className="eyebrow">
-              {nav.find((n) => n.id === active)?.label}
-            </div>
-            <h1>{titleFor(active)}</h1>
-          </div>
-          <div className="top-actions">
-            <span className="service-pill">
-              <span className="live-dot" />
-              混合模式
-            </span>
-            <button className="icon-button" title="帮助">
-              <CircleHelp size={18} />
-            </button>
-            <button className="avatar">你</button>
-          </div>
+          <h1>{titleFor(active)}</h1>
         </header>
         {notice && (
           <div className="notice">
@@ -464,6 +531,7 @@ export default function App() {
             setInstructions={setInstructions}
             audioUrl={audioUrl}
             selectedVoice={selectedVoice}
+            jobs={jobs}
             busy={busy}
             synthesize={synthesize}
             setActive={setActive}
@@ -477,6 +545,7 @@ export default function App() {
             onImport={importVoice}
             onBatchImport={importVoices}
             onRemove={removeVoice}
+            onUse={useVoice}
           />
         )}
         {active === "clone" && (
@@ -489,7 +558,7 @@ export default function App() {
           <GatewayPanel gateway={gateway} models={models} voices={voices} />
         )}
         {active === "history" && <History jobs={jobs} onRefresh={refreshJobs} />}
-        {active === "settings" && <Settings models={models} />}
+        {active === "settings" && <Settings models={models} onJobsChanged={refreshJobs} />}
       </main>
     </div>
   );
@@ -501,7 +570,7 @@ function titleFor(active: string) {
       synthesize: "把文字变成可听见的质感",
       voices: "音色库",
       clone: "声音克隆",
-      design: "Voice Design",
+      design: "声音设计",
       gateway: "OpenAI 兼容网关",
       history: "任务历史",
       settings: "设置",
@@ -527,11 +596,13 @@ function Synthesis(props: {
   setInstructions: (value: string) => void;
   audioUrl: string;
   selectedVoice?: Voice;
+  jobs: Job[];
   busy: boolean;
   synthesize: () => void;
   setActive: (value: string) => void;
 }) {
   const p = props;
+  const [sidePanel, setSidePanel] = useState<"settings" | "history">("settings");
   const synthesisModels = p.models.filter((item) =>
     item.operations.includes("synthesis"),
   );
@@ -558,7 +629,6 @@ function Synthesis(props: {
       <div className="editor-column">
         <div className="section-heading">
           <div>
-            <span className="section-kicker">01 / SCRIPT</span>
             <h2>输入一段文字</h2>
           </div>
           <span className="char-count">
@@ -595,15 +665,16 @@ function Synthesis(props: {
           </div>
         </div>
         {p.audioUrl && (
-          <div className="player">
+          <div className="player latest-player">
             <div className="player-icon">
               <Volume2 size={20} />
             </div>
             <div className="player-main">
               <div className="player-title">
-                刚刚生成的音频{" "}
-                <span>· {p.selectedVoice?.display_name || p.voice}</span>
+                <strong>刚刚生成</strong>
+                <span>{p.selectedVoice?.display_name || p.voice} · {p.format.toUpperCase()}</span>
               </div>
+              <p className="player-text">{p.text}</p>
               <audio controls src={p.audioUrl} />
             </div>
             <a
@@ -624,14 +695,32 @@ function Synthesis(props: {
           >
             <Sparkles size={17} />
             {p.busy ? "生成中..." : "生成语音"}
-            <span>CTRL ↵</span>
           </button>
-          <span className="hint">生成前会校验模型与音色的作用域</span>
         </div>
       </div>
       <aside className="control-column">
-        <div className="control-section">
-          <div className="section-kicker">02 / VOICE</div>
+        <div className="control-tabs" role="tablist" aria-label="合成侧栏">
+          <button
+            className={sidePanel === "settings" ? "selected" : ""}
+            role="tab"
+            aria-selected={sidePanel === "settings"}
+            onClick={() => setSidePanel("settings")}
+          >
+            <Settings2 size={16} />
+            设置
+          </button>
+          <button
+            className={sidePanel === "history" ? "selected" : ""}
+            role="tab"
+            aria-selected={sidePanel === "history"}
+            onClick={() => setSidePanel("history")}
+          >
+            <Clock3 size={16} />
+            历史
+          </button>
+        </div>
+        {sidePanel === "settings" ? <>
+          <div className="control-section">
           <label>厂商</label>
           <select
             value={selectedProvider}
@@ -709,9 +798,8 @@ function Synthesis(props: {
             <Plus size={15} />
             创建或克隆音色
           </button>
-        </div>
-        <div className="control-section bordered">
-          <div className="section-kicker">03 / FEEL</div>
+          </div>
+          <div className="control-section bordered">
           <div className="range-label">
             <label>语速</label>
             <output>{p.speed.toFixed(1)}×</output>
@@ -741,17 +829,68 @@ function Synthesis(props: {
               </button>
             ))}
           </div>
-        </div>
-        <div className="control-note">
-          <Gauge size={15} />
-          <span>
-            {p.selectedModel?.mode === "provider"
-              ? "当前模型会调用已保存的厂商凭据，结果来自真实语音服务。"
-              : "当前模型使用本地演示适配器，不会消耗厂商额度。"}
-          </span>
-        </div>
+          </div>
+          <div className="control-note">
+            <Gauge size={16} />
+            <span>
+              {p.selectedModel?.mode === "provider"
+                ? "当前模型会调用已保存的厂商凭据，结果来自真实语音服务。"
+                : "当前模型使用本地演示适配器，不会消耗厂商额度。"}
+            </span>
+          </div>
+        </> : (
+          <div className="control-history">
+            <div className="control-history-head">
+              <div>
+                <h3>最近生成</h3>
+                <span>最近 {Math.min(p.jobs.length, 6)} 条记录</span>
+              </div>
+              <button className="inline-action" onClick={() => p.setActive("history")}>查看全部</button>
+            </div>
+            {p.jobs.length === 0 ? (
+              <div className="control-history-empty"><Clock3 size={20} /><span>生成语音后，记录会出现在这里。</span></div>
+            ) : (
+              <div className="control-history-list">
+                {p.jobs.slice(0, 6).map((job) => (
+                  <div className="control-history-item" key={job.id}>
+                    <HistoryAudioButton src={job.audio_url} label="播放这条语音" compact />
+                    <div>
+                      <strong title={job.input_text || `${job.voice} · ${job.model}`}>{job.input_text || `${job.voice} · ${job.model}`}</strong>
+                      <span>{job.audio_cleaned_at ? "音频已清理" : job.voice} · {new Date(job.created_at).toLocaleString()}</span>
+                    </div>
+                    <a className={job.audio_url ? "control-history-download" : "control-history-download disabled"} href={job.audio_url || undefined} download title="下载声音文件" aria-label="下载声音文件"><Download size={16} /></a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </aside>
     </section>
+  );
+}
+
+function HistoryAudioButton({ src, label, compact = false }: { src?: string | null; label: string; compact?: boolean }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const toggle = async () => {
+    const audio = audioRef.current;
+    if (!audio || !src) return;
+    if (audio.paused) {
+      await audio.play();
+      setPlaying(true);
+    } else {
+      audio.pause();
+      setPlaying(false);
+    }
+  };
+  return (
+    <>
+      <button className={`history-play${compact ? " compact" : ""}`} onClick={() => void toggle()} disabled={!src} title={src ? label : "声音文件不可用"} aria-label={src ? label : "声音文件不可用"}>
+        {playing ? <Pause size={compact ? 15 : 18} fill="currentColor" /> : <Play size={compact ? 15 : 18} fill="currentColor" />}
+      </button>
+      {src && <audio ref={audioRef} src={src} preload="none" onEnded={() => setPlaying(false)} />}
+    </>
   );
 }
 
@@ -762,6 +901,7 @@ function VoiceLibrary({
   onImport,
   onBatchImport,
   onRemove,
+  onUse,
 }: {
   voices: Voice[];
   models: Model[];
@@ -769,13 +909,17 @@ function VoiceLibrary({
   onImport: (config: ImportVoiceConfig) => Promise<void>;
   onBatchImport: (configs: ImportVoiceConfig[]) => Promise<void>;
   onRemove: (voice: Voice) => Promise<void>;
+  onUse: (voice: Voice) => void;
 }) {
   const [provider, setProvider] = useState("all");
+  const [scope, setScope] = useState<"all" | "mine">("all");
   const [showImport, setShowImport] = useState(false);
-  const filtered =
-    provider === "all"
-      ? voices
-      : voices.filter((item) => item.provider === provider);
+  const scoped = scope === "mine"
+    ? voices.filter((item) => item.voice_type !== "preset")
+    : voices;
+  const filtered = provider === "all"
+    ? scoped
+    : scoped.filter((item) => item.provider === provider);
   const counts = Object.fromEntries(
     Object.keys(providerMeta).map((id) => [
       id,
@@ -786,8 +930,8 @@ function VoiceLibrary({
     <section className="page-section voice-library">
       <div className="page-toolbar">
         <div>
-          <span className="section-kicker">VOICE REGISTRY</span>
-          <h2>预置音色与克隆音色</h2>
+          <h2>找到适合这段文字的声音</h2>
+          <p className="page-description">浏览预置、克隆、导入和设计音色，并按厂商快速筛选。</p>
         </div>
         <div className="toolbar-actions">
           <button
@@ -802,6 +946,10 @@ function VoiceLibrary({
             开始克隆
           </button>
         </div>
+      </div>
+      <div className="voice-scope-tabs" role="tablist" aria-label="音色范围">
+        <button className={scope === "all" ? "selected" : ""} onClick={() => setScope("all")}>全部音色</button>
+        <button className={scope === "mine" ? "selected" : ""} onClick={() => setScope("mine")}>我的音色</button>
       </div>
       <div className="voice-filters">
         <button
@@ -867,13 +1015,17 @@ function VoiceLibrary({
                 <span className="live-dot" />
                 可用
               </span>
-              <button
-                className="icon-button delete-voice"
-                title="从音色库移除"
-                onClick={() => onRemove(item)}
-              >
-                <Trash2 size={16} />
-              </button>
+              <div className="voice-actions">
+                <button className="voice-use-button" onClick={() => onUse(item)}>使用</button>
+                <button
+                  className="icon-button delete-voice"
+                  title="从音色库移除"
+                  aria-label={`从音色库移除 ${item.display_name}`}
+                  onClick={() => onRemove(item)}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </div>
           ))
         ) : (
@@ -1065,7 +1217,6 @@ function ImportVoiceDialog({
       >
         <div className="modal-head">
           <div>
-            <span className="section-kicker">REMOTE VOICE</span>
             <h3 id="import-title">导入已有厂商音色</h3>
           </div>
           <button className="icon-button" title="关闭" onClick={onClose}>
@@ -1353,15 +1504,13 @@ function VoiceDesignPanel({
     <section className="page-section design-page">
       <div className="design-hero">
         <div>
-          <span className="section-kicker">VOICE DESIGN / 01</span>
           <h2>先写下声音的性格，<br /><em>再让它开口。</em></h2>
           <p>不需要参考音频。用自然语言描述年龄、质感、语速和情绪，创建一枚可以复用的设计音色。</p>
         </div>
-        <div className="design-signal"><WandSparkles size={21} /><span>3 家厂商 · 2 种资产模式</span></div>
       </div>
       <div className="design-layout">
         <div className="design-form">
-          <div className="design-step"><span>02</span><div><b>选择设计引擎</b><small>不同厂商的 Voice Design 形态不同，界面会自动显示必填项。</small></div></div>
+          <div className="design-step"><div><b>选择设计引擎</b></div></div>
           <div className="provider-switch">
             {Object.entries(providerMeta).filter(([id]) => designModels.some((item) => item.provider === id)).map(([id, meta]) => (
               <button className={provider === id ? "selected" : ""} onClick={() => chooseProvider(id)} key={id}><span className={"provider-dot " + meta.tone} />{meta.label}</button>
@@ -1371,18 +1520,17 @@ function VoiceDesignPanel({
           <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
             {providerModels.map((item) => <option value={item.model_id} key={item.gateway_id}>{item.display_name}</option>)}
           </select>
-          <div className="design-step design-step-spaced"><span>03</span><div><b>描述你想要的声音</b><small>越具体越稳定；避免同时写互相冲突的特征。</small></div></div>
+          <div className="design-step design-step-spaced"><div><b>描述你想要的声音</b></div></div>
           <textarea className="design-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={promptLimit} />
           <div className="design-count">{prompt.length} / {promptLimit.toLocaleString()}</div>
           <label>试听文本</label>
           <textarea className="design-preview-text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} maxLength={previewLimit} />
           <div className="form-grid design-names"><div><label>显示名称</label><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></div><div><label>兼容别名</label><input value={publicName} onChange={(event) => setPublicName(event.target.value)} /></div></div>
-          <button className="primary-button design-submit" onClick={() => void submit()} disabled={working || !selected || !prompt.trim() || !previewText.trim()}><WandSparkles size={17} />{working ? "正在设计..." : "创建并试听音色"}<span>↵</span></button>
+          <button className="primary-button design-submit" onClick={() => void submit()} disabled={working || !selected || !prompt.trim() || !previewText.trim()}><WandSparkles size={17} />{working ? "正在设计..." : "创建并试听音色"}</button>
         </div>
         <aside className="design-inspector">
-          <div className="inspector-label">DESIGN OUTPUT</div>
+          <h3 className="inspector-title">试听结果</h3>
           {previewVoice ? <div className="design-result"><div className="result-mark"><Check size={19} /></div><strong>{previewVoice.display_name}</strong><small>{previewVoice.provider === "mimo" ? "请求级设计模板" : "已保存到音色库"}</small>{previewVoice.preview_url && <audio controls src={previewVoice.preview_url} />}</div> : <div className="design-empty"><WandSparkles size={28} /><strong>还没有试听结果</strong><span>提交描述后，这里会出现试听播放器与资产状态。</span></div>}
-          <div className="design-rules"><b>设计提示</b><span>声音质感</span><span>年龄与身份</span><span>语速与停顿</span><span>情绪和使用场景</span></div>
         </aside>
       </div>
     </section>
@@ -1463,7 +1611,6 @@ function ClonePanel({
   return (
     <section className="page-section clone-page">
       <div className="clone-intro">
-        <span className="section-kicker">VOICE CLONING / 01</span>
         <h2>
           让一个真实的声音
           <br />
@@ -1633,6 +1780,8 @@ function GatewayPanel({
   const [statsWindow, setStatsWindow] = useState("7d");
   const [statsProvider, setStatsProvider] = useState("");
   const [statsLoading, setStatsLoading] = useState(false);
+  const [gatewayView, setGatewayView] = useState<"docs" | "test" | "stats">("docs");
+  const [openEndpoint, setOpenEndpoint] = useState("models");
   useEffect(() => setCurrent(gateway), [gateway]);
   const activeGateway = current || gateway;
   const base = activeGateway?.base_url || "http://127.0.0.1:8765/v1";
@@ -1884,88 +2033,152 @@ function GatewayPanel({
   const displayedTest = streamTest.status !== "idle" ? streamTest : speechTest;
   const formatLatency = (value: number | null) => value === null ? "--" : `${value}ms`;
   const statsProviderLabel = (id: string) => providerMeta[id]?.label || id;
+  const endpointDocs = [
+    {
+      id: "models",
+      method: "GET",
+      path: "/v1/models",
+      description: "列出四家厂商当前可用的语音模型。",
+      request: "无请求体。使用 Bearer 网关 Key 鉴权。",
+      response: "OpenAI 模型列表，模型 ID 可直接用于语音生成请求。",
+      note: "适合在客户端启动时发现模型并刷新模型选择器。",
+      example: `curl "${endpoint("models")}" -H "Authorization: Bearer $VOICE_STUDIO_API_KEY"`,
+    },
+    {
+      id: "speech",
+      method: "POST",
+      path: "/v1/audio/speech",
+      description: "使用 OpenAI 兼容格式生成完整音频文件。",
+      request: "JSON：model、voice、input、response_format，可选 speed 与 instructions。",
+      response: "返回 MP3、WAV、OPUS、AAC、FLAC 或 PCM 音频数据。",
+      note: "模型与音色必须来自同一厂商并处于兼容作用域。",
+      example: `curl "${endpoint("audio/speech")}" \\\n  -H "Authorization: Bearer $VOICE_STUDIO_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(payload)}' --output voice.${testFormat}`,
+    },
+    {
+      id: "stream",
+      method: "POST",
+      path: "/v1/audio/speech/stream",
+      description: "通过 SSE 持续返回 Base64 编码的音频分片。",
+      request: "与非流式接口相同，可额外传入 chunk_size 控制兼容分片大小。",
+      response: "依次返回 audio、done 或 error 事件；done 中包含任务与上游流式状态。",
+      note: "MiMo 当前返回 PCM，其他支持模型优先使用厂商原生 MP3 流。",
+      example: `curl.exe -N "${endpoint("audio/speech/stream")}" \\\n  -H "Authorization: Bearer $VOICE_STUDIO_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify({ ...payload, chunk_size: 4096 })}'`,
+    },
+  ];
   return (
     <section className="page-section gateway-page">
       <div className="gateway-header">
         <div>
-          <span className="section-kicker">OPENAI COMPATIBILITY</span>
-          <h2>把 Voice Studio 接到任何支持 OpenAI 的应用</h2>
+          <h2>把 Voice Studio 接入你的应用</h2>
           <p>
-            本地网关统一模型、音色别名和输出格式。厂商 Key
-            只留在后端，外部应用只需要一个 Base URL 和网关 Key。
+            使用 OpenAI 兼容接口调用四家语音模型。外部应用只需要 Base URL
+            和网关 Key，厂商凭据始终留在本机后端。
           </p>
         </div>
-        <div className="gateway-status">
-          <span>
-            <span className="live-dot" /> 运行中
-          </span>
-            <small>{activeGateway?.managed ? "仅本机监听 · 可轮换 Key" : "仅本机监听 · 环境变量托管"}</small>
-        </div>
       </div>
-      <div className="gateway-grid">
-        <div className="code-panel">
-          <div className="code-head">
-            <span>连接信息</span>
-            <button className="icon-button" title="复制连接信息" onClick={() => copy("连接信息", `${base}\nBearer ${key}`)}>
-              <Copy size={16} />
-            </button>
+
+      <section className="gateway-credential-layout" aria-label="网关凭据">
+        <div className="gateway-credential-intro">
+          <h3>网关访问凭据</h3>
+          <p>这枚密钥用于本机应用访问统一语音网关，不会替代已保存的厂商 API Key。</p>
+          <div className="gateway-credential-facts">
+            <div><span>监听范围</span><strong>仅本机</strong></div>
+            <div><span>管理方式</span><strong>{activeGateway?.managed ? "应用托管" : "环境变量"}</strong></div>
           </div>
-          <div className="code-line">
-            <span>Base URL</span>
-            <code>{base}</code>
-          </div>
-          <div className="code-line">
-            <span>API Key</span>
-            <code>{visibleKey ? key : (activeGateway?.key_hint || "未读取")}</code>
-            <button className="inline-copy" onClick={() => copy("网关 Key", key)} title="复制网关 Key"><Copy size={13} /></button>
-          </div>
-          <div className="code-line">
-            <span>模式</span>
-            <code>{activeGateway?.mode || "hybrid"} · Provider Adapter</code>
-          </div>
-          <div className="code-snippet"><span>外部应用只需要配置 Base URL 与网关 Key</span></div>
         </div>
-        <div className="capability-panel">
-          <div className="capability-title">
-            <KeyRound size={17} />
-            当前兼容面
+        <div className="gateway-current-key">
+          <div className="gateway-key-heading">
+            <h3>当前网关 Key</h3>
+            <span className="gateway-key-state"><span className="live-dot" />有效</span>
           </div>
-          <div className="capability">
-            <Check size={15} />
-            <span>
-              <strong>GET /v1/models</strong>
-              <small>OpenAI SDK 模型发现 · 统一返回四家厂商模型</small>
-            </span>
+          <div className="gateway-key-value">
+            <code>{visibleKey ? key : (activeGateway?.key_hint || "未读取")}</code>
+            <button className="icon-button" onClick={() => setVisibleKey((value) => !value)} title={visibleKey ? "隐藏网关 Key" : "显示网关 Key"} aria-label={visibleKey ? "隐藏网关 Key" : "显示网关 Key"}>
+              {visibleKey ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+            <button className="icon-button" onClick={() => copy("网关 Key", key)} title="复制网关 Key" aria-label="复制网关 Key"><Copy size={16} /></button>
           </div>
-          <div className="capability">
-            <Check size={15} />
-            <span>
-              <strong>POST /v1/audio/speech</strong>
-              <small>非流式音频合成 · 支持 wav / mp3 / opus / aac / flac / pcm</small>
-            </span>
-          </div>
-          <div className="capability">
-            <Check size={15} />
-            <span>
-              <strong>POST /v1/audio/speech/stream</strong>
-              <small>SSE 音频分片 · 火山 Seed / 千问 CosyVoice / MiniMax 支持原生 MP3 流 · MiMo 自动兼容</small>
-            </span>
-          </div>
-          <div className="gateway-warning">
-            <CircleHelp size={15} />
-            <span>{activeGateway?.note || "MiMo 已接入真实厂商接口。"}<br />Key 来源：{activeGateway?.key_source || "本地配置"}</span>
-          </div>
-          <div className="gateway-actions">
-            <button className="secondary-button" onClick={() => setVisibleKey((value) => !value)}>{visibleKey ? <EyeOff size={14} /> : <Eye size={14} />}{visibleKey ? "隐藏 Key" : "显示 Key"}</button>
-            <button className="secondary-button" disabled={!activeGateway?.managed || rotating} onClick={rotate}><RotateCcw size={14} className={rotating ? "spinning" : ""} />{rotating ? "正在轮换" : "轮换网关 Key"}</button>
+          <div className="gateway-key-footer">
+            <span>来源：{activeGateway?.key_source || "本地配置"}</span>
+            <button className="secondary-button" disabled={!activeGateway?.managed || rotating} onClick={rotate}>
+              <RotateCcw size={14} className={rotating ? "spinning" : ""} />
+              {rotating ? "正在轮换" : "轮换网关 Key"}
+            </button>
           </div>
           {copied && <div className="copy-feedback"><Check size={14} />{copied}</div>}
         </div>
+      </section>
+
+      <section className="gateway-quickstart" aria-label="快速开始">
+        <div className="gateway-quickstart-card">
+          <div className="gateway-quickstart-title">
+            <span><Code2 size={18} />快速开始</span>
+            <button className="quickstart-copy" onClick={() => copy("连接信息", `${base}\nBearer ${key}`)} title="复制连接信息"><Copy size={15} />复制</button>
+          </div>
+          <div className="gateway-quickstart-grid">
+            <div><span>Base URL</span><code>{base}</code></div>
+            <div><span>鉴权方式</span><code>Bearer $VOICE_STUDIO_API_KEY</code></div>
+          </div>
+          <p>把 Base URL 填入支持 OpenAI 的客户端，并将当前网关 Key 作为 API Key。</p>
+        </div>
+        <aside className="gateway-quickstart-aside">
+          <div className="gateway-security-message">
+            <ShieldCheck size={21} />
+            <p>网关 Key 只应保存在受信任的本机应用中，不要放入公开网页、日志或源码仓库。</p>
+          </div>
+          <div className="gateway-error-format">
+            <Code2 size={19} />
+            <strong>错误格式</strong>
+            <p>失败响应包含稳定错误码与可读消息。</p>
+            <code>{'{"detail":{"code":"INVALID_API_KEY","message":"..."}}'}</code>
+          </div>
+        </aside>
+      </section>
+
+      <div className="gateway-view-tabs" role="tablist" aria-label="网关页面">
+        <button role="tab" aria-selected={gatewayView === "docs"} className={gatewayView === "docs" ? "selected" : ""} onClick={() => setGatewayView("docs")}><Code2 size={16} />接入文档</button>
+        <button role="tab" aria-selected={gatewayView === "test"} className={gatewayView === "test" ? "selected" : ""} onClick={() => setGatewayView("test")}><FlaskConical size={16} />接口测试</button>
+        <button role="tab" aria-selected={gatewayView === "stats"} className={gatewayView === "stats" ? "selected" : ""} onClick={() => setGatewayView("stats")}><Gauge size={16} />运行统计</button>
       </div>
-      <section className="gateway-observability">
+
+      {gatewayView === "docs" && (
+        <section className="gateway-docs" role="tabpanel">
+          <div className="gateway-docs-heading">
+            <h3>OpenAI 兼容接口</h3>
+            <span>{endpointDocs.length} 个端点</span>
+          </div>
+          {endpointDocs.map((item) => {
+            const expanded = openEndpoint === item.id;
+            return (
+              <article className={expanded ? "gateway-endpoint expanded" : "gateway-endpoint"} key={item.id}>
+                <button className="gateway-endpoint-trigger" aria-expanded={expanded} onClick={() => setOpenEndpoint(expanded ? "" : item.id)}>
+                  <span className={item.method === "GET" ? "gateway-method get" : "gateway-method post"}>{item.method}</span>
+                  <code>{item.path}</code>
+                  <span className="gateway-endpoint-summary">{item.description}</span>
+                  <ChevronRight size={17} />
+                </button>
+                {expanded && (
+                  <div className="gateway-endpoint-body">
+                    <div className="gateway-endpoint-details">
+                      <div><span>请求</span><p>{item.request}</p></div>
+                      <div><span>响应</span><p>{item.response}</p></div>
+                      <div><span>注意</span><p>{item.note}</p></div>
+                    </div>
+                    <div className="gateway-doc-code">
+                      <div><span>cURL</span><button className="quickstart-copy" onClick={() => copy(`${item.method} ${item.path}`, item.example)}><Copy size={14} />复制</button></div>
+                      <pre>{item.example}</pre>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </section>
+      )}
+
+      {gatewayView === "stats" && <section className="gateway-observability" role="tabpanel">
         <div className="observability-head">
           <div>
-            <span className="section-kicker">GATEWAY HEALTH</span>
             <h3>运行统计</h3>
             <p>仅统计本版本启用记录后的网关语音请求，不混入旧任务数据。</p>
           </div>
@@ -2020,11 +2233,10 @@ function GatewayPanel({
         ) : (
           <div className="stats-empty"><Gauge size={18} /><span>当前范围还没有网关语音请求。完成一次接口测试后会开始显示统计。</span></div>
         )}
-      </section>
-      <div className="gateway-testbench">
+      </section>}
+      {gatewayView === "test" && <div className="gateway-testbench" role="tabpanel">
         <div className="testbench-header">
           <div>
-            <span className="section-kicker">LIVE CHECK</span>
             <h3>接口测试台</h3>
             <p>先测试模型发现，再用一小段文字确认网关、音色和厂商凭据都能正常工作。</p>
           </div>
@@ -2085,56 +2297,210 @@ function GatewayPanel({
           </div>
         </div>
         <div className="gateway-examples">
-          <div className="examples-head"><div><span className="section-kicker">COPY READY</span><strong>当前请求示例</strong></div><button className="inline-copy" onClick={() => copy(exampleTab, examples[exampleTab])} title="复制当前示例"><Copy size={14} /></button></div>
+          <div className="examples-head"><strong>当前请求示例</strong><button className="inline-copy" onClick={() => copy(exampleTab, examples[exampleTab])} title="复制当前示例"><Copy size={14} /></button></div>
           <div className="example-tabs">{[["powershell", "PowerShell"], ["curl", "curl"], ["python", "Python"], ["javascript", "JavaScript"], ["stream", "SSE 流式"]].map(([id, label]) => <button className={exampleTab === id ? "selected" : ""} onClick={() => setExampleTab(id)} key={id}>{label}</button>)}</div>
           <pre>{examples[exampleTab]}</pre>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }
 
-type StorageInfo = {
-  job_count: number;
-  audio_count: number;
-  audio_bytes: number;
-  audio_megabytes: number;
-  missing_audio_count: number;
-};
-
 function formatBytes(bytes: number) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  return `${(bytes / 1024 / 1024 / 1024 / 1024).toFixed(2)} TB`;
+}
+
+type HistoryFilter =
+  | { kind: "all" }
+  | { kind: "today" }
+  | { kind: "yesterday" }
+  | { kind: "recent"; days: 7 }
+  | { kind: "day"; date: string };
+
+function localDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromKey(key: string) {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(year, month - 1, day, 12);
+}
+
+function shiftedDateKey(days: number) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return localDateKey(date);
+}
+
+function jobDateKey(job: Job) {
+  return job.created_date || localDateKey(new Date(job.created_at));
+}
+
+function historyFilterLabel(filter: HistoryFilter) {
+  if (filter.kind === "today") return "今天";
+  if (filter.kind === "yesterday") return "昨天";
+  if (filter.kind === "recent") return "最近 7 天";
+  if (filter.kind === "day") {
+    return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(dateFromKey(filter.date));
+  }
+  return "全部日期";
+}
+
+function HistoryDateMenu({ filter, onChange }: { filter: HistoryFilter; onChange: (filter: HistoryFilter) => void }) {
+  const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState(() => {
+    const source = filter.kind === "day" ? dateFromKey(filter.date) : new Date();
+    return new Date(source.getFullYear(), source.getMonth(), 1, 12);
+  });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const todayKey = localDateKey(new Date());
+  const selectedKey = filter.kind === "day" ? filter.date : "";
+  const firstDay = new Date(month.getFullYear(), month.getMonth(), 1, 12);
+  const mondayOffset = (firstDay.getDay() + 6) % 7;
+  const calendarDays = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(month.getFullYear(), month.getMonth(), 1 - mondayOffset + index, 12);
+    return date;
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const choose = (next: HistoryFilter) => {
+    onChange(next);
+    setOpen(false);
+  };
+  const toggle = () => {
+    if (!open) {
+      const source = filter.kind === "day" ? dateFromKey(filter.date) : new Date();
+      setMonth(new Date(source.getFullYear(), source.getMonth(), 1, 12));
+    }
+    setOpen((current) => !current);
+  };
+  const presetSelected = (kind: HistoryFilter["kind"]) => filter.kind === kind;
+
+  return (
+    <div className="history-date-menu" ref={containerRef}>
+      <button className={filter.kind === "all" ? "history-date-trigger" : "history-date-trigger active"} type="button" onClick={toggle} aria-haspopup="dialog" aria-expanded={open}>
+        <CalendarDays size={18} />
+        <span>{historyFilterLabel(filter)}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div className="history-calendar-popover" role="dialog" aria-label="筛选任务日期">
+          <div className="history-date-presets">
+            {([
+              ["all", "全部日期"],
+              ["today", "今天"],
+              ["yesterday", "昨天"],
+              ["recent", "最近 7 天"],
+            ] as const).map(([kind, label]) => (
+              <button className={presetSelected(kind) ? "selected" : ""} type="button" onClick={() => choose(kind === "recent" ? { kind, days: 7 } : { kind })} key={kind}>
+                <span>{label}</span>
+                {presetSelected(kind) && <Check size={15} />}
+              </button>
+            ))}
+          </div>
+          <div className="history-calendar">
+            <div className="history-calendar-head">
+              <strong>{new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(month)}</strong>
+              <div>
+                <button type="button" onClick={() => setMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1, 12))} title="上个月" aria-label="上个月"><ChevronLeft size={18} /></button>
+                <button type="button" onClick={() => setMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1, 12))} title="下个月" aria-label="下个月"><ChevronRight size={18} /></button>
+              </div>
+            </div>
+            <div className="history-calendar-weekdays" aria-hidden="true">
+              {["一", "二", "三", "四", "五", "六", "日"].map((day) => <span key={day}>{day}</span>)}
+            </div>
+            <div className="history-calendar-days">
+              {calendarDays.map((date) => {
+                const key = localDateKey(date);
+                const classes = [
+                  date.getMonth() !== month.getMonth() ? "outside" : "",
+                  key === todayKey ? "today" : "",
+                  key === selectedKey ? "selected" : "",
+                ].filter(Boolean).join(" ");
+                return <button className={classes} type="button" onClick={() => choose({ kind: "day", date: key })} aria-label={key} aria-pressed={key === selectedKey} key={key}>{date.getDate()}</button>;
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function matchesHistoryFilter(job: Job, filter: HistoryFilter) {
+  const key = jobDateKey(job);
+  if (filter.kind === "today") return key === shiftedDateKey(0);
+  if (filter.kind === "yesterday") return key === shiftedDateKey(-1);
+  if (filter.kind === "recent") return key >= shiftedDateKey(-(filter.days - 1)) && key <= shiftedDateKey(0);
+  if (filter.kind === "day") return key === filter.date;
+  return true;
+}
+
+function historyGroupLabel(key: string) {
+  if (key === shiftedDateKey(0)) return "今天";
+  if (key === shiftedDateKey(-1)) return "昨天";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(dateFromKey(key));
 }
 
 function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<void> }) {
-  const [dateFilter, setDateFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState<HistoryFilter>({ kind: "all" });
+  const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
-  const dates = Array.from(
-    new Set(jobs.map((job) => job.created_date || new Date(job.created_at).toLocaleDateString("sv-SE"))),
-  ).sort((a, b) => b.localeCompare(a));
-  const filtered = dateFilter
-    ? jobs.filter((job) => (job.created_date || new Date(job.created_at).toLocaleDateString("sv-SE")) === dateFilter)
-    : jobs;
+  const filtered = useMemo(() => jobs.filter((job) => matchesHistoryFilter(job, dateFilter)), [jobs, dateFilter]);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, Job[]>();
+    filtered.forEach((job) => {
+      const key = jobDateKey(job);
+      grouped.set(key, [...(grouped.get(key) || []), job]);
+    });
+    return [...grouped.entries()].sort(([left], [right]) => right.localeCompare(left));
+  }, [filtered]);
   const visibleIds = filtered.map((job) => job.id);
   const selectedJobs = filtered.filter((job) => selectedIds.has(job.id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
-  const clearDate = () => setDateFilter("");
-  const loadStorage = () => api<StorageInfo>("/api/jobs/storage").then(setStorage).catch(() => undefined);
 
-  useEffect(() => {
-    void loadStorage();
-  }, [jobs.length]);
   useEffect(() => {
     setSelectedIds((current) => new Set([...current].filter((id) => jobs.some((job) => job.id === id))));
   }, [jobs]);
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [dateFilter]);
 
+  const changeFilter = (next: HistoryFilter) => {
+    setDateFilter(next);
+    setSelectedIds(new Set());
+    setMessage("");
+  };
+  const toggleBatchMode = () => {
+    setBatchMode((current) => {
+      if (current) setSelectedIds(new Set());
+      return !current;
+    });
+    setMessage("");
+  };
   const toggleAll = () => {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -2153,20 +2519,20 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
   };
   const downloadZip = async () => {
     const exportIds = selectedJobs.map((job) => job.id);
-    if (!exportIds.length && !dateFilter) return setMessage("请先选择要导出的任务");
+    if (!exportIds.length) return setMessage("请先选择要导出的任务");
     setWorking(true);
     setMessage("正在整理 ZIP 文件...");
     try {
       const response = await fetch("/api/jobs/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_ids: exportIds, date: exportIds.length ? undefined : dateFilter }),
+        body: JSON.stringify({ job_ids: exportIds }),
       });
       if (!response.ok) throw new Error(await responseError(response));
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = dateFilter && !exportIds.length ? `voice-studio-${dateFilter}.zip` : "voice-studio-selected-jobs.zip";
+      anchor.download = "voice-studio-selected-jobs.zip";
       anchor.click();
       URL.revokeObjectURL(url);
       setMessage("ZIP 已开始下载");
@@ -2177,7 +2543,7 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
     }
   };
   const deleteSelected = async () => {
-    const ids = [...selectedIds];
+    const ids = selectedJobs.map((job) => job.id);
     if (!ids.length) return setMessage("请先选择要删除的任务");
     if (!window.confirm(`确定删除选中的 ${ids.length} 条任务及对应音频吗？此操作不可撤销。`)) return;
     setWorking(true);
@@ -2188,6 +2554,7 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
         body: JSON.stringify({ job_ids: ids }),
       });
       setSelectedIds(new Set());
+      setBatchMode(false);
       setMessage(`${result.message}，释放 ${formatBytes(result.freed_bytes)}`);
       await onRefresh();
     } catch (error) {
@@ -2212,68 +2579,291 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
   };
   const refresh = async () => {
     setWorking(true);
-    await onRefresh();
-    await loadStorage();
-    setWorking(false);
+    try {
+      await onRefresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "刷新失败");
+    } finally {
+      setWorking(false);
+    }
   };
 
   return (
-    <section className="page-section">
-      <div className="page-toolbar">
-        <div>
-          <span className="section-kicker">ACTIVITY LOG</span>
-          <h2>{dateFilter ? `${dateFilter} 的任务` : "最近任务"}</h2>
-        </div>
-        <div className="history-toolbar-actions">
-          <label className="history-date-filter">
-            <Clock3 size={15} />
-            <span>按天</span>
-            <input type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} aria-label="按日期筛选任务" />
-          </label>
-          {dateFilter && <button className="icon-button" onClick={clearDate} title="清除日期筛选"><X size={16} /></button>}
-          <button className="secondary-button" onClick={() => void refresh()} disabled={working}><RefreshCw size={16} />刷新</button>
+    <section className="page-section history-page">
+      <div className="history-command-bar">
+        <HistoryDateMenu filter={dateFilter} onChange={changeFilter} />
+        <div className="history-command-actions">
+          <button className={batchMode ? "secondary-button active" : "secondary-button"} type="button" onClick={toggleBatchMode}>
+            <ListChecks size={17} />
+            {batchMode ? "退出批量管理" : "批量管理"}
+          </button>
+          <button className={working ? "icon-button history-refresh working" : "icon-button history-refresh"} type="button" onClick={() => void refresh()} disabled={working} title="刷新任务历史" aria-label="刷新任务历史"><RefreshCw size={18} /></button>
         </div>
       </div>
-      {dates.length > 0 && (
-        <div className="history-date-chips" aria-label="有任务的日期">
-          <button className={!dateFilter ? "selected" : ""} onClick={clearDate}>全部</button>
-          {dates.slice(0, 8).map((date) => <button className={dateFilter === date ? "selected" : ""} onClick={() => setDateFilter(date)} key={date}>{date}</button>)}
+      {batchMode && (
+        <div className="history-selection-bar">
+          <div className="history-selection-summary">
+            <span>已选择 <strong>{selectedJobs.length}</strong> 条</span>
+            <button className="inline-action" type="button" onClick={toggleAll} disabled={!visibleIds.length}>{allVisibleSelected ? "取消全选" : "全选"}</button>
+          </div>
+          <div className="history-selection-actions">
+            <button className="secondary-button" type="button" onClick={() => void downloadZip()} disabled={working || !selectedJobs.length}><Download size={16} />下载 ZIP</button>
+            <button className="danger-button" type="button" onClick={() => void deleteSelected()} disabled={working || !selectedJobs.length}><Trash2 size={16} />删除</button>
+          </div>
         </div>
       )}
-      <div className="history-bulk-bar">
-        <label className="history-select-all"><input type="checkbox" checked={allVisibleSelected} onChange={toggleAll} disabled={!visibleIds.length} />选择当前{dateFilter ? "日期" : "列表"}</label>
-        <span>{selectedIds.size ? `已选 ${selectedIds.size} 条` : "未选择任务"}</span>
-        <div className="history-bulk-actions">
-          <button className="secondary-button" onClick={() => void downloadZip()} disabled={working || (!selectedIds.size && !dateFilter)}><Download size={15} />{selectedIds.size ? "导出选中" : "导出本日"}</button>
-          <button className="danger-button" onClick={() => void deleteSelected()} disabled={working || !selectedIds.size}><Trash2 size={15} />删除选中</button>
-        </div>
-      </div>
-      {storage && <div className="history-storage"><FileAudio size={15} /><span>任务音频占用 <strong>{storage.audio_megabytes.toFixed(1)} MB</strong> · {storage.audio_count} 个文件</span>{storage.missing_audio_count > 0 && <small>{storage.missing_audio_count} 个文件已丢失</small>}</div>}
       {message && <div className="history-message"><Activity size={14} />{message}</div>}
-      <div className="history-list">
-        {filtered.length === 0 ? <div className="empty-state"><Clock3 size={22} /><span>{dateFilter ? "这一天没有任务记录。" : "还没有任务，去合成工作台生成第一条语音。"}</span></div> : filtered.map((job) => (
-          <div className="history-row" key={job.id}>
-            <label className="history-checkbox"><input type="checkbox" checked={selectedIds.has(job.id)} onChange={() => toggleJob(job.id)} aria-label={`选择任务 ${job.id}`} /></label>
-            <div className="history-icon"><Check size={16} /></div>
-            <div className="history-main">
-              <strong>{job.voice} · {job.model}</strong>
-              <span>{job.input_chars} 字符 · {job.duration_ms / 1000}s · {new Date(job.created_at).toLocaleString()}</span>
-              {job.input_text ? <details className="history-record"><summary>查看文字记录</summary><p>{job.input_text}</p></details> : <span className="history-missing">旧记录未保存原始文字</span>}
-            </div>
-            <div className="history-actions">
-              <a className={job.text_url ? "history-action" : "history-action disabled"} href={job.text_url || undefined} title={job.text_url ? "下载文字记录" : "没有可下载的文字记录"} aria-label="下载文字记录"><FileText size={16} /></a>
-              <a className={job.audio_url ? "history-action" : "history-action disabled"} href={job.audio_url || undefined} title={job.audio_url ? "下载声音文件" : "声音文件不可用"} aria-label="下载声音文件"><Download size={16} /></a>
-              <button className="history-action danger-action" onClick={() => void deleteOne(job)} title="删除任务" aria-label="删除任务"><Trash2 size={16} /></button>
-              <span className="status"><span className="live-dot" />{job.status === "completed" ? "已完成" : job.status}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+      {groups.length === 0 ? (
+        <div className="empty-state history-empty"><Clock3 size={22} /><span>{dateFilter.kind === "all" ? "还没有任务，去合成工作台生成第一条语音。" : "这个日期范围内没有任务记录。"}</span></div>
+      ) : (
+        <div className="history-groups">
+          {groups.map(([date, dateJobs]) => (
+            <section className="history-date-group" key={date}>
+              <h2>{historyGroupLabel(date)}</h2>
+              <div className="history-list">
+                {dateJobs.map((job) => (
+                  <article className={batchMode ? `history-row batch-selecting${selectedIds.has(job.id) ? " selected" : ""}` : "history-row"} key={job.id}>
+                    {batchMode && <label className="history-checkbox"><input type="checkbox" checked={selectedIds.has(job.id)} onChange={() => toggleJob(job.id)} aria-label={`选择任务 ${job.id}`} /></label>}
+                    <HistoryAudioButton src={job.audio_url} label="播放这条语音" />
+                    <div className="history-main">
+                      <strong title={job.input_text || `${job.voice} · ${job.model}`}>{job.input_text || `${job.voice} · ${job.model}`}</strong>
+                      <span>{job.voice} · {job.model}</span>
+                      <span>{job.input_chars} 字符 · {job.duration_ms / 1000}s · {new Date(job.created_at).toLocaleString()}</span>
+                      <span className="status"><span className="live-dot" />{job.status === "completed" ? "已完成" : job.status}</span>
+                      {job.audio_cleaned_at && <span className="history-audio-cleaned"><FileAudio size={14} />音频已按存储策略清理，文字记录仍然保留</span>}
+                      {job.input_text ? <details className="history-record"><summary>查看文字记录</summary><p>{job.input_text}</p></details> : <span className="history-missing">旧记录未保存原始文字</span>}
+                    </div>
+                    {!batchMode && <div className="history-actions">
+                      <a className={job.text_url ? "history-action" : "history-action disabled"} href={job.text_url || undefined} title={job.text_url ? "下载文字记录" : "没有可下载的文字记录"} aria-label="下载文字记录"><FileText size={16} /></a>
+                      <a className={job.audio_url ? "history-action" : "history-action disabled"} href={job.audio_url || undefined} title={job.audio_url ? "下载声音文件" : "声音文件不可用"} aria-label="下载声音文件"><Download size={16} /></a>
+                      <button className="history-action danger-action" onClick={() => void deleteOne(job)} title="删除任务" aria-label="删除任务"><Trash2 size={16} /></button>
+                    </div>}
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
-function Settings({ models }: { models: Model[] }) {
+function Settings({ models, onJobsChanged }: { models: Model[]; onJobsChanged: () => Promise<void> }) {
+  const [section, setSection] = useState<"providers" | "storage">("providers");
+  return (
+    <section className="page-section settings-shell">
+      <div className="settings-navigation" role="tablist" aria-label="设置分类">
+        <button className={section === "providers" ? "selected" : ""} type="button" role="tab" aria-selected={section === "providers"} onClick={() => setSection("providers")}><KeyRound size={18} />厂商账号</button>
+        <button className={section === "storage" ? "selected" : ""} type="button" role="tab" aria-selected={section === "storage"} onClick={() => setSection("storage")}><HardDrive size={18} />存储与清理</button>
+      </div>
+      {section === "providers" ? <ProviderSettings models={models} /> : <StorageSettings onJobsChanged={onJobsChanged} />}
+    </section>
+  );
+}
+
+type StoragePolicyDraft = {
+  automatic_enabled: boolean;
+  retention_days: number;
+  capacity_gb: number;
+  interval: "daily" | "weekly";
+  cleanup_scope: "audio_only" | "jobs";
+};
+
+const GIBIBYTE = 1024 * 1024 * 1024;
+
+function storageDraft(policy: StoragePolicy): StoragePolicyDraft {
+  return {
+    automatic_enabled: policy.automatic_enabled,
+    retention_days: policy.retention_days,
+    capacity_gb: Number((policy.capacity_limit_bytes / GIBIBYTE).toFixed(2)),
+    interval: policy.interval,
+    cleanup_scope: policy.cleanup_scope,
+  };
+}
+
+function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void> }) {
+  const [status, setStatus] = useState<StorageStatus | null>(null);
+  const [draft, setDraft] = useState<StoragePolicyDraft | null>(null);
+  const [preview, setPreview] = useState<CleanupPreview | null>(null);
+  const [working, setWorking] = useState<"" | "loading" | "saving" | "preview" | "cleanup" | "directory">("loading");
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    setWorking("loading");
+    try {
+      const next = await api<StorageStatus>("/api/storage");
+      setStatus(next);
+      setDraft(storageDraft(next.policy));
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法读取存储状态");
+    } finally {
+      setWorking("");
+    }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const dirty = Boolean(status && draft && (
+    draft.automatic_enabled !== status.policy.automatic_enabled ||
+    draft.retention_days !== status.policy.retention_days ||
+    Math.round(draft.capacity_gb * GIBIBYTE) !== status.policy.capacity_limit_bytes ||
+    draft.interval !== status.policy.interval ||
+    draft.cleanup_scope !== status.policy.cleanup_scope
+  ));
+
+  const persistDraft = async (showMessage = true) => {
+    if (!draft) throw new Error("存储策略尚未加载");
+    if (!Number.isFinite(draft.retention_days) || draft.retention_days < 1) throw new Error("自动保留天数不能少于 1 天");
+    if (!Number.isFinite(draft.capacity_gb) || draft.capacity_gb < 0.1) throw new Error("容量上限不能少于 0.1 GB");
+    const next = await api<StorageStatus>("/api/storage/policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        automatic_enabled: draft.automatic_enabled,
+        retention_days: Math.round(draft.retention_days),
+        capacity_limit_bytes: Math.round(draft.capacity_gb * GIBIBYTE),
+        interval: draft.interval,
+        cleanup_scope: draft.cleanup_scope,
+      }),
+    });
+    setStatus(next);
+    setDraft(storageDraft(next.policy));
+    if (showMessage) setMessage("存储策略已保存");
+    return next;
+  };
+
+  const save = async () => {
+    setWorking("saving");
+    setMessage("");
+    try {
+      await persistDraft();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const showCleanupPreview = async () => {
+    setWorking("preview");
+    setMessage("");
+    try {
+      if (dirty) await persistDraft(false);
+      setPreview(await api<CleanupPreview>("/api/storage/cleanup/preview", { method: "POST" }));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法计算清理范围");
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const cleanNow = async () => {
+    setWorking("cleanup");
+    try {
+      const response = await api<{ result: CleanupRun; storage: StorageStatus }>("/api/storage/cleanup", { method: "POST" });
+      setStatus(response.storage);
+      setDraft(storageDraft(response.storage.policy));
+      setPreview(null);
+      setMessage(response.result.files_removed || response.result.jobs_removed
+        ? `${response.result.message}，释放 ${formatBytes(response.result.bytes_freed)}`
+        : response.result.message);
+      await onJobsChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "清理失败");
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const openDirectory = async () => {
+    setWorking("directory");
+    try {
+      const result = await api<{ opened: boolean; path: string }>("/api/storage/open-directory", { method: "POST" });
+      setMessage(result.opened ? "已打开音频存储目录" : `音频存储目录：${result.path}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法打开存储目录");
+    } finally {
+      setWorking("");
+    }
+  };
+
+  if (!status || !draft) {
+    return <div className="storage-loading"><RefreshCw className={working === "loading" ? "spinning" : ""} size={20} /><span>{message || "正在读取存储状态..."}</span>{message && <button className="secondary-button" type="button" onClick={() => void load()}>重试</button>}</div>;
+  }
+
+  const usagePercent = Math.min(100, Math.max(0, status.usage.capacity_ratio * 100));
+  const latest = status.cleanup_history[0];
+  return (
+    <div className="storage-settings-page">
+      <header className="storage-heading">
+        <div><h2>生成文件存储</h2><p>控制任务音频的保留时间和磁盘占用。音色库、API 凭据与声音克隆素材不会被自动清理。</p></div>
+        <button className="secondary-button" type="button" onClick={() => void openDirectory()} disabled={Boolean(working)}><FolderOpen size={17} />打开目录</button>
+      </header>
+
+      <section className="storage-overview" aria-label="存储空间概览">
+        <div className="storage-usage-head">
+          <div className="storage-usage-title"><HardDrive size={22} /><span>当前占用</span></div>
+          <strong>{formatBytes(status.usage.audio_bytes)} <span>/ {formatBytes(status.policy.capacity_limit_bytes)}</span></strong>
+        </div>
+        <div className="storage-progress" aria-label={`已使用 ${usagePercent.toFixed(0)}%`}><span style={{ width: `${usagePercent}%` }} /></div>
+        <div className="storage-stats">
+          <div><strong>{status.usage.audio_count}</strong><span>个音频</span></div>
+          <div><strong>{status.usage.job_count}</strong><span>条任务记录</span></div>
+          <div><strong>{status.usage.oldest_audio_at ? new Date(status.usage.oldest_audio_at).toLocaleDateString() : "--"}</strong><span>最早音频</span></div>
+        </div>
+      </section>
+
+      <section className="storage-policy-section">
+        <div className="storage-policy-row storage-policy-master">
+          <div><strong>自动清理</strong><span>{draft.automatic_enabled ? (status.cleanup_history.some((run) => run.trigger === "automatic") && status.next_cleanup_at ? `下次检查 ${new Date(status.next_cleanup_at).toLocaleString()}` : "等待首次自动检查") : "关闭后仍可使用立即清理"}</span></div>
+          <button className={draft.automatic_enabled ? "toggle-switch active" : "toggle-switch"} type="button" role="switch" aria-checked={draft.automatic_enabled} onClick={() => setDraft({ ...draft, automatic_enabled: !draft.automatic_enabled })}><span /></button>
+        </div>
+
+        <div className="storage-policy-grid">
+          <div className="storage-setting-block">
+            <label htmlFor="retention-days">自动保留天数</label>
+            <div className="number-with-unit"><input id="retention-days" type="number" min="1" max="3650" value={draft.retention_days} onChange={(event) => setDraft({ ...draft, retention_days: Number(event.target.value) })} /><span>天</span></div>
+            <p>超过保留时间的音频会进入清理范围。</p>
+          </div>
+          <div className="storage-setting-block">
+            <label htmlFor="capacity-limit">容量上限</label>
+            <div className="number-with-unit"><input id="capacity-limit" type="number" min="0.1" max="10240" step="0.1" value={draft.capacity_gb} onChange={(event) => setDraft({ ...draft, capacity_gb: Number(event.target.value) })} /><span>GB</span></div>
+            <p>超出上限后优先清理最旧的音频。</p>
+          </div>
+          <div className="storage-setting-block">
+            <label>检查频率</label>
+            <div className="storage-segmented"><button className={draft.interval === "daily" ? "selected" : ""} type="button" onClick={() => setDraft({ ...draft, interval: "daily" })}>每天</button><button className={draft.interval === "weekly" ? "selected" : ""} type="button" onClick={() => setDraft({ ...draft, interval: "weekly" })}>每周</button></div>
+            <p>程序启动时也会检查是否到期。</p>
+          </div>
+          <div className="storage-setting-block">
+            <label>清理范围</label>
+            <div className="storage-segmented storage-scope"><button className={draft.cleanup_scope === "audio_only" ? "selected" : ""} type="button" onClick={() => setDraft({ ...draft, cleanup_scope: "audio_only" })}>只清理音频</button><button className={draft.cleanup_scope === "jobs" ? "selected danger" : ""} type="button" onClick={() => setDraft({ ...draft, cleanup_scope: "jobs" })}>音频和任务记录</button></div>
+            <p>{draft.cleanup_scope === "audio_only" ? "文字和生成参数会继续保留。" : "到期任务将从任务历史中永久删除。"}</p>
+          </div>
+        </div>
+      </section>
+
+      {draft.cleanup_scope === "jobs" && <div className="storage-danger-note"><ShieldCheck size={18} /><span>当前策略会永久删除任务记录。建议先使用批量导出备份重要内容。</span></div>}
+      {message && <div className="form-message storage-message"><Activity size={15} />{message}</div>}
+
+      <div className="storage-actions">
+        <div>{latest ? <>最近清理：{new Date(latest.completed_at).toLocaleString()} · 释放 {formatBytes(latest.bytes_freed)}</> : "尚未执行过清理"}</div>
+        <button className="secondary-button" type="button" onClick={() => void showCleanupPreview()} disabled={Boolean(working)}><Trash2 size={17} />{working === "preview" ? "正在计算..." : "立即清理"}</button>
+        <button className="primary-button compact" type="button" onClick={() => void save()} disabled={Boolean(working) || !dirty}><Save size={17} />{working === "saving" ? "保存中..." : "保存设置"}</button>
+      </div>
+
+      <section className="cleanup-history-section">
+        <div className="cleanup-history-heading"><h3>清理记录</h3><button className="icon-button" type="button" onClick={() => void load()} disabled={Boolean(working)} title="刷新存储状态" aria-label="刷新存储状态"><RefreshCw size={17} /></button></div>
+        {status.cleanup_history.length ? <div className="cleanup-history-list">{status.cleanup_history.map((run) => <div className="cleanup-history-row" key={run.id}><span>{new Date(run.completed_at).toLocaleString()}</span><strong>{run.trigger === "automatic" ? "自动清理" : "手动清理"}</strong><span>{run.files_removed} 个音频</span><span>{formatBytes(run.bytes_freed)}</span><span className={run.status === "completed" ? "cleanup-success" : "cleanup-partial"}>{run.status === "completed" ? "完成" : "部分失败"}</span></div>)}</div> : <div className="cleanup-history-empty">清理执行后，结果会记录在这里。</div>}
+      </section>
+
+      {preview && <div className="storage-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && working !== "cleanup") setPreview(null); }}><div className="storage-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-confirm-title"><div className="storage-confirm-icon"><Trash2 size={22} /></div><h3 id="cleanup-confirm-title">确认本次清理</h3><div className="storage-preview-metrics"><div><span>音频文件</span><strong>{preview.file_count} 个</strong></div><div><span>预计释放</span><strong>{formatBytes(preview.bytes_to_free)}</strong></div><div><span>{preview.cleanup_scope === "jobs" ? "删除记录" : "保留记录"}</span><strong>{preview.cleanup_scope === "jobs" ? `${preview.job_count} 条` : `${preview.jobs_preserved} 条`}</strong></div></div><p>{preview.file_count || preview.job_count ? (preview.cleanup_scope === "jobs" ? "音频和对应任务记录将永久删除，此操作无法撤销。" : "音频清理后无法恢复，文字记录和生成参数会继续保留。") : "当前没有符合存储策略的文件。"}</p><div className="storage-confirm-actions"><button className="secondary-button" type="button" onClick={() => setPreview(null)} disabled={working === "cleanup"}>取消</button><button className={preview.cleanup_scope === "jobs" ? "danger-button" : "primary-button compact"} type="button" onClick={() => void cleanNow()} disabled={working === "cleanup" || (!preview.file_count && !preview.job_count)}>{working === "cleanup" ? "正在清理..." : "确认清理"}</button></div></div></div>}
+    </div>
+  );
+}
+
+function ProviderSettings({ models }: { models: Model[] }) {
   const [specs, setSpecs] = useState<Record<string, ProviderSpec>>({});
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [provider, setProvider] = useState("dashscope");
@@ -2403,9 +2993,8 @@ function Settings({ models }: { models: Model[] }) {
   const current = accounts.find((item) => item.id === editingId);
 
   return (
-    <section className="page-section settings-page">
+    <div className="settings-page">
       <div>
-        <span className="section-kicker">SECURE CREDENTIALS</span>
         <h2>厂商账号与 API 凭据</h2>
         <p className="settings-lead">
           API Key 直接写入 Windows Credential Manager。页面和 SQLite
@@ -2461,9 +3050,6 @@ function Settings({ models }: { models: Model[] }) {
         <div className="credential-editor">
           <div className="editor-title">
             <div>
-              <span className="section-kicker">
-                {provider.toUpperCase()} / ACCOUNT
-              </span>
               <h3>{spec?.display_name || provider}</h3>
             </div>
             <div className="credential-status">
@@ -2639,6 +3225,6 @@ function Settings({ models }: { models: Model[] }) {
           </div>
         </div>
       </div>
-    </section>
+    </div>
   );
 }
