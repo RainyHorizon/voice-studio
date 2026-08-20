@@ -14,7 +14,7 @@ import time
 import uuid
 import wave
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -41,6 +41,16 @@ from .providers.volcengine import DEFAULT_ENDPOINT as VOLCENGINE_ENDPOINT
 from .providers.volcengine import VOLCENGINE_MODELS, VolcengineProvider
 from .providers.minimax import DEFAULT_ENDPOINT as MINIMAX_PROVIDER_ENDPOINT
 from .providers.minimax import MINIMAX_MODELS, MiniMaxProvider
+from .storage import (
+    automatic_cleanup_due,
+    build_cleanup_plan,
+    cleanup_preview,
+    execute_cleanup,
+    init_storage_schema,
+    read_policy,
+    storage_snapshot,
+    write_policy,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -83,6 +93,7 @@ app = FastAPI(title="Voice Studio Gateway", version="0.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
+storage_cleanup_task: asyncio.Task[None] | None = None
 
 
 @app.middleware("http")
@@ -214,6 +225,11 @@ def init_db() -> None:
         job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()}
         if "input_text" not in job_columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN input_text TEXT NOT NULL DEFAULT ''")
+        if "audio_cleaned_at" not in job_columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN audio_cleaned_at TEXT")
+        if "audio_cleanup_reason" not in job_columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN audio_cleanup_reason TEXT")
+        init_storage_schema(connection)
         if connection.execute("SELECT COUNT(*) FROM voices").fetchone()[0] == 0:
             seed = [
                 ("voice_narrator", "minimax", "speech-2.8-turbo", "narrator", "旁白 · 沉稳", "narrator", "preset", "active", ["zh-CN", "en-US"]),
@@ -333,7 +349,43 @@ def init_db() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    global storage_cleanup_task
     init_db()
+    await asyncio.to_thread(run_scheduled_storage_cleanup)
+    storage_cleanup_task = asyncio.create_task(storage_cleanup_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global storage_cleanup_task
+    if storage_cleanup_task is None:
+        return
+    storage_cleanup_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await storage_cleanup_task
+    storage_cleanup_task = None
+
+
+def run_scheduled_storage_cleanup() -> dict[str, Any] | None:
+    with db() as connection:
+        if not automatic_cleanup_due(connection):
+            return None
+        return execute_cleanup(
+            connection,
+            ROOT,
+            AUDIO,
+            trigger="automatic",
+            run_id="cleanup_" + uuid.uuid4().hex[:12],
+        )
+
+
+async def storage_cleanup_loop() -> None:
+    while True:
+        await asyncio.sleep(60 * 60)
+        try:
+            await asyncio.to_thread(run_scheduled_storage_cleanup)
+        except Exception as exc:
+            print(f"Storage cleanup check failed: {exc}")
 
 
 class SynthesisBody(BaseModel):
@@ -368,6 +420,14 @@ class ImportVoicesBody(BaseModel):
 class JobBatchBody(BaseModel):
     job_ids: list[str] = Field(default_factory=list, max_length=500)
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class StoragePolicyBody(BaseModel):
+    automatic_enabled: bool = False
+    retention_days: int = Field(default=30, ge=1, le=3650)
+    capacity_limit_bytes: int = Field(default=5 * 1024 * 1024 * 1024, ge=100 * 1024 * 1024, le=10 * 1024 * 1024 * 1024 * 1024)
+    interval: str = Field(default="daily", pattern=r"^(daily|weekly)$")
+    cleanup_scope: str = Field(default="audio_only", pattern=r"^(audio_only|jobs)$")
 
 
 class ProviderAccountBody(BaseModel):
@@ -1848,27 +1908,59 @@ def delete_job(job_id: str):
 @app.get("/api/jobs/storage")
 def job_storage():
     with db() as connection:
-        rows = connection.execute("SELECT * FROM jobs").fetchall()
-    audio_count = 0
-    audio_bytes = 0
-    missing_count = 0
-    referenced: set[Path] = set()
-    for row in rows:
-        path = _safe_existing_audio_path(row)
-        if path is None:
-            if row["audio_path"]:
-                missing_count += 1
-            continue
-        referenced.add(path)
-        audio_count += 1
-        audio_bytes += path.stat().st_size
+        usage = storage_snapshot(connection, ROOT, AUDIO)["usage"]
     return {
-        "job_count": len(rows),
-        "audio_count": audio_count,
-        "audio_bytes": audio_bytes,
-        "audio_megabytes": round(audio_bytes / 1024 / 1024, 2),
-        "missing_audio_count": missing_count,
+        "job_count": usage["job_count"],
+        "audio_count": usage["audio_count"],
+        "audio_bytes": usage["audio_bytes"],
+        "audio_megabytes": round(usage["audio_bytes"] / 1024 / 1024, 2),
+        "missing_audio_count": usage["missing_audio_count"],
     }
+
+
+@app.get("/api/storage")
+def get_storage_status():
+    with db() as connection:
+        return storage_snapshot(connection, ROOT, AUDIO)
+
+
+@app.put("/api/storage/policy")
+def update_storage_policy(body: StoragePolicyBody):
+    with db() as connection:
+        write_policy(connection, body.model_dump())
+        return storage_snapshot(connection, ROOT, AUDIO)
+
+
+@app.post("/api/storage/cleanup/preview")
+def preview_storage_cleanup():
+    with db() as connection:
+        plan = build_cleanup_plan(connection, ROOT, AUDIO, read_policy(connection))
+        return cleanup_preview(plan)
+
+
+@app.post("/api/storage/cleanup")
+def clean_storage_now():
+    with db() as connection:
+        result = execute_cleanup(
+            connection,
+            ROOT,
+            AUDIO,
+            trigger="manual",
+            run_id="cleanup_" + uuid.uuid4().hex[:12],
+        )
+        return {"result": result, "storage": storage_snapshot(connection, ROOT, AUDIO)}
+
+
+@app.post("/api/storage/open-directory")
+def open_storage_directory():
+    AUDIO.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        return {"opened": False, "path": str(AUDIO.resolve())}
+    try:
+        subprocess.Popen(["explorer.exe", str(AUDIO.resolve())])
+    except OSError as exc:
+        raise HTTPException(500, f"无法打开存储目录：{exc}") from exc
+    return {"opened": True, "path": str(AUDIO.resolve())}
 
 
 @app.get("/api/gateway/stats")
