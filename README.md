@@ -45,14 +45,16 @@ Voice Studio 是一个在 Windows 本地运行的多厂商 AI 语音工作台。
 | 项目 | 要求 |
 | --- | --- |
 | 操作系统 | Windows 10 或 Windows 11 |
-| Python | Python 3.11 或更高版本 |
-| Node.js | 仅从源码首次构建前端时需要；Windows Release 不需要 |
-| FFmpeg | `ffmpeg` 和 `ffprobe` 可通过系统 `Path` 调用 |
+| Python | 便携版不需要；轻量版和源码版需要 Python 3.11 或更高版本 |
+| Node.js | 仅从源码首次构建前端时需要 |
+| FFmpeg | 便携版已包含；轻量版和源码版需要加入系统 `Path` |
 | 网络 | 能够访问所使用厂商的官方 API |
 
 ### 下载项目
 
-普通用户优先下载 GitHub **Releases** 页面中的 `Voice-Studio-*-Windows.zip`。该压缩包已经包含前端文件，运行时不需要安装 Node.js。
+普通用户优先下载 GitHub **Releases** 页面中的 `Voice-Studio-*-Windows-Portable.zip`。便携版已经包含 Python 运行时、后端依赖、前端文件、FFmpeg 和 FFprobe，完整解压后即可使用。
+
+体积较小的 `Voice-Studio-*-Windows.zip` 是轻量版，不需要 Node.js，但仍要求电脑已经安装 Python 3.11+ 与 FFmpeg。
 
 使用 GitHub 的 **Code → Download ZIP** 或 Git 克隆得到的是源码版，首次启动需要 Node.js：
 
@@ -69,7 +71,7 @@ cd voice-studio
 启动 Voice Studio.bat
 ```
 
-首次启动会创建 Python 虚拟环境并安装后端依赖；源码版还会构建前端，Windows Release 会跳过这一步。所需时间取决于网络速度，启动完成后会自动打开：
+轻量版首次启动会创建 Python 虚拟环境并安装后端依赖；源码版还会构建前端。便携版不安装运行依赖，启动完成后会自动打开：
 
 ```text
 http://127.0.0.1:8765
@@ -286,6 +288,16 @@ Set-Location backend
 ```
 
 压缩包会生成到 `output\releases`，包含后端代码、预构建前端、启动脚本、README 和许可证，不包含 `data` 中的本地数据库、音频、Gateway Key、虚拟环境或依赖目录。
+
+构建解压即用的 Windows 便携版：
+
+```powershell
+.\build-windows-portable.ps1
+```
+
+便携版通过 PyInstaller 打包 Python 运行时和后端依赖，并附带本机 FFmpeg 发布目录中的 `ffmpeg.exe`、`ffprobe.exe`、许可证及构建说明。构建机需要 Node.js、Python 3.11+、FFmpeg/FFprobe；最终用户不需要安装这些组件。便携版同样不会包含本地数据库、音频、日志、API Key 或 Gateway Key。
+
+构建脚本会同时生成 `.zip.sha256` 校验文件。当前 EXE 没有商业代码签名，Windows SmartScreen 可能显示“未知发布者”；请只从本项目 GitHub Releases 下载，并在发布页提供 SHA256 文件供用户核对。
 
 ## 当前限制
 
