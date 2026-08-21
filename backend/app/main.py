@@ -55,7 +55,7 @@ from .storage import (
     write_policy,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.getenv("VOICE_STUDIO_ROOT", Path(__file__).resolve().parents[2])).expanduser().resolve()
 DATA = ROOT / "data"
 AUDIO = DATA / "audio"
 DB_PATH = DATA / "voice_studio.db"
