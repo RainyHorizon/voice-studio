@@ -7,10 +7,7 @@ from .base import ProviderModel, SpeechProvider, SynthesisRequest
 
 
 MODELS = [
-    ProviderModel("minimax", "speech-2.8-hd", "Speech 2.8 HD（演示）", "tts", "高保真", "中", ["zh-CN", "en-US", "ja-JP"], True, operations=["synthesis", "clone"]),
-    ProviderModel("minimax", "speech-2.8-turbo", "Speech 2.8 Turbo（演示）", "tts", "均衡", "快", ["zh-CN", "en-US", "ja-JP"], True, operations=["synthesis", "clone"]),
-    ProviderModel("minimax", "speech-2.6-hd", "Speech 2.6 HD（演示）", "tts", "细腻", "中", ["zh-CN", "en-US", "ja-JP"], True, operations=["synthesis", "clone"]),
-    ProviderModel("minimax", "speech-2.6-turbo", "Speech 2.6 Turbo（演示）", "tts", "高效", "快", ["zh-CN", "en-US", "ja-JP"], True, operations=["synthesis", "clone"]),
+    ProviderModel("demo", "local-demo", "本地演示音频", "tts", "诊断", "即时", ["zh-CN", "en-US"], False, operations=["synthesis"]),
 ]
 
 

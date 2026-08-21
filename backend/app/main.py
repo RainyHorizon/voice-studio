@@ -6,9 +6,12 @@ import hashlib
 import json
 import mimetypes
 import os
+import platform
 import secrets
+import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -30,7 +33,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .credentials import CredentialStoreError, delete_api_key, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
+from .credentials import CredentialStoreError, credential_store_status, delete_api_key, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
 from .providers.base import ProviderError, SynthesisRequest
 from .providers.demo import DemoProvider
 from .providers.mimo import DEFAULT_ENDPOINT as MIMO_ENDPOINT
@@ -58,6 +61,13 @@ AUDIO = DATA / "audio"
 DB_PATH = DATA / "voice_studio.db"
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 GATEWAY_CONFIG_PATH = DATA / "gateway.json"
+try:
+    APP_PORT = int(os.getenv("VOICE_STUDIO_PORT", "8765"))
+except ValueError:
+    APP_PORT = 8765
+if not 1 <= APP_PORT <= 65535:
+    APP_PORT = 8765
+LOCAL_BASE_URL = f"http://127.0.0.1:{APP_PORT}"
 MINIMAX_ENDPOINT = MINIMAX_PROVIDER_ENDPOINT
 PROVIDER_SPECS = {
     "dashscope": {"display_name": "通义千问", "secret_label": "标准 API Key", "default_endpoint": QWEN_ENDPOINT, "endpoint_note": "中国大陆站官方地址", "verification": "remote_auth"},
@@ -74,8 +84,8 @@ OFFICIAL_ENDPOINT_HOSTS = {
 LOCAL_BROWSER_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",
-    "http://127.0.0.1:8765",
-    "http://localhost:8765",
+    LOCAL_BASE_URL,
+    f"http://localhost:{APP_PORT}",
 }
 LOCAL_BROWSER_ORIGINS.update(
     origin.strip()
@@ -171,7 +181,7 @@ def gateway_key_source() -> str:
 
 
 def available_models():
-    return [*QWEN_MODELS, *VOLCENGINE_MODELS, *MINIMAX_MODELS, *MIMO_MODELS]
+    return [*demo_provider.models(), *QWEN_MODELS, *VOLCENGINE_MODELS, *MINIMAX_MODELS, *MIMO_MODELS]
 
 
 def now() -> str:
@@ -240,6 +250,10 @@ def init_db() -> None:
                 "INSERT INTO voices (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [(a,b,c,d,e,f,g,h,json.dumps(i, ensure_ascii=False),now()) for a,b,c,d,e,f,g,h,i in seed],
             )
+        connection.execute(
+            "INSERT OR IGNORE INTO voices (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("voice_local_demo", "demo", "local-demo", "local-demo", "本地演示音色", "local-demo", "preset", "active", json.dumps(["zh-CN", "en-US"], ensure_ascii=False), now()),
+        )
         mimo_voices = [
             ("voice_mimo_default", "mimo_default", "MiMo 默认", "mimo-default", ["zh-CN", "en-US"]),
             ("voice_mimo_bingtang", "冰糖", "冰糖 · 清甜女声", "bingtang", ["zh-CN"]),
@@ -679,7 +693,84 @@ def summary():
         jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         successful = connection.execute("SELECT COUNT(*) FROM jobs WHERE status='completed'").fetchone()[0]
     key = gateway_key()
-    return {"voices": voices, "jobs": jobs, "successful_jobs": successful, "gateway": {"enabled": True, "base_url": "/v1", "key_prefix": key[:10]}}
+    return {"application": "voice-studio", "version": app.version, "voices": voices, "jobs": jobs, "successful_jobs": successful, "gateway": {"enabled": True, "base_url": "/v1", "key_prefix": key[:10]}}
+
+
+def _command_diagnostic(command: str, arguments: list[str], required: bool) -> dict[str, Any]:
+    path = shutil.which(command)
+    if not path:
+        return {
+            "id": command,
+            "label": command,
+            "status": "error" if required else "warning",
+            "version": "",
+            "detail": f"未找到 {command}，请安装后加入系统 Path。" if required else f"未找到 {command}；使用预构建版本时不影响运行。",
+        }
+    try:
+        completed = subprocess.run([path, *arguments], capture_output=True, text=True, timeout=10)
+        output = (completed.stdout or completed.stderr).splitlines()
+        if completed.returncode != 0:
+            raise OSError(f"exit code {completed.returncode}")
+        return {"id": command, "label": command, "status": "ok", "version": output[0] if output else "可用", "detail": path}
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"id": command, "label": command, "status": "error" if required else "warning", "version": "", "detail": f"{command} 无法正常运行：{exc}"}
+
+
+def system_diagnostics() -> dict[str, Any]:
+    checks: list[dict[str, Any]] = [
+        {
+            "id": "python",
+            "label": "Python",
+            "status": "ok" if sys.version_info >= (3, 11) else "error",
+            "version": platform.python_version(),
+            "detail": sys.executable,
+        },
+        _command_diagnostic("ffmpeg", ["-version"], True),
+        _command_diagnostic("ffprobe", ["-version"], True),
+    ]
+    frontend_ready = (FRONTEND_DIST / "index.html").is_file()
+    checks.append({
+        "id": "frontend",
+        "label": "前端文件",
+        "status": "ok" if frontend_ready else "error",
+        "version": "已构建" if frontend_ready else "缺失",
+        "detail": str(FRONTEND_DIST),
+    })
+    node = _command_diagnostic("node", ["--version"], False)
+    if frontend_ready:
+        node["detail"] = f"{node['detail']} 当前前端已构建，日常启动不依赖 Node.js。"
+    checks.append(node)
+    credential = credential_store_status()
+    checks.append({
+        "id": "credentials",
+        "label": "凭据存储",
+        "status": "ok" if credential["available"] else "error",
+        "version": credential["backend"],
+        "detail": credential["message"],
+    })
+    try:
+        DATA.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix="voice-studio-", dir=DATA):
+            pass
+        data_check = {"id": "data", "label": "数据目录", "status": "ok", "version": "可写", "detail": str(DATA)}
+    except OSError as exc:
+        data_check = {"id": "data", "label": "数据目录", "status": "error", "version": "不可写", "detail": str(exc)}
+    checks.append(data_check)
+    required_failures = sum(item["status"] == "error" for item in checks)
+    return {
+        "status": "error" if required_failures else ("warning" if any(item["status"] == "warning" for item in checks) else "ok"),
+        "platform": platform.platform(),
+        "base_url": LOCAL_BASE_URL,
+        "port": APP_PORT,
+        "checks": checks,
+        "required_failures": required_failures,
+        "demo": {"model": "demo/local-demo", "voice": "local-demo", "available": True},
+    }
+
+
+@app.get("/api/system/diagnostics")
+def get_system_diagnostics():
+    return system_diagnostics()
 
 
 @app.get("/api/providers")
@@ -1393,7 +1484,7 @@ async def openai_speech(body: SynthesisBody):
     wav_path = AUDIO / f"{job_id}.wav"
     design_instructions = body.instructions or (resolved_voice["design_prompt"] if "design" in model.operations else None)
     try:
-        adapter = provider_for(model.provider)
+        adapter = demo_provider if model.mode == "demo" else provider_for(model.provider)
         provider_voice = voice_payload(model, resolved_voice, voice_id)
         result = await adapter.synthesize(SynthesisRequest(resolved_model, provider_voice, body.input, body.speed, "wav", design_instructions), wav_path)
         wav_info = audio_metadata(wav_path)
@@ -1699,7 +1790,7 @@ async def openai_speech_stream(body: StreamingSynthesisBody):
         )
         return error(f"音色 {voice_id} 与模型 {model_id} 不兼容", code="invalid_voice_scope")
     try:
-        adapter = provider_for(model.provider)
+        adapter = demo_provider if model.mode == "demo" else provider_for(model.provider)
     except ProviderError as exc:
         record_gateway_request(
             request_id=request_id, endpoint="speech/stream", status="failed", status_code=exc.status,
@@ -2032,7 +2123,7 @@ def gateway_config():
     key = gateway_key()
     return {
         "enabled": True,
-        "base_url": "http://127.0.0.1:8765/v1",
+        "base_url": f"{LOCAL_BASE_URL}/v1",
         "key": key,
         "key_hint": key[:7] + "..." + key[-4:],
         "key_source": gateway_key_source(),

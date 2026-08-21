@@ -54,3 +54,12 @@ def delete_api_key(account_id: str) -> None:
             keyring.delete_password(SERVICE_NAME, account_id)
     except KeyringError as exc:
         raise CredentialStoreError("无法删除 Windows Credential Manager 凭据") from exc
+
+
+def credential_store_status() -> dict[str, str | bool]:
+    try:
+        keyring.get_password(SERVICE_NAME, "__healthcheck__")
+        backend = type(keyring.get_keyring()).__name__
+        return {"available": True, "backend": backend, "message": "Windows Credential Manager 可用"}
+    except KeyringError as exc:
+        return {"available": False, "backend": "", "message": f"无法访问 Windows Credential Manager：{exc}"}
