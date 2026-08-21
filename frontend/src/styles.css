@@ -333,6 +333,8 @@ h2 { color: var(--text); font-size: 24px; font-weight: 750; }
 .model-meta strong { color: #343a44; }
 .model-meta small { color: var(--text-muted); }
 .provider-mark { color: #242933; }
+.provider-mark.gray { color: #56606d; background: #e4e8ee; }
+.provider-dot.gray { background: #9ba4b0; }
 .inline-action { color: var(--blue-strong); }
 .range-label output { color: var(--blue-strong); }
 .control-section input[type=range] { accent-color: var(--blue); }
@@ -1308,6 +1310,48 @@ body {
 .settings-shell > .settings-page { width: 100%; }
 
 .storage-settings-page { width: 100%; max-width: 1120px; }
+.environment-settings-page { width: 100%; max-width: 1120px; }
+.environment-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 32px;
+}
+.environment-heading h2 { margin: 0; font-size: 28px; }
+.environment-heading p { margin: 10px 0 0; color: var(--text-soft); font-size: 15px; line-height: 1.75; }
+.environment-heading .secondary-button { min-height: 44px; font-size: 14px; }
+.environment-summary {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-top: 38px;
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.environment-summary-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: #24805b; background: #e8f6ef; }
+.environment-summary.warning .environment-summary-icon { color: #a16a20; background: #fff5df; }
+.environment-summary.error .environment-summary-icon { color: #b44848; background: #fff0f0; }
+.environment-summary div { display: grid; gap: 5px; }
+.environment-summary strong { color: #2c323b; font-size: 17px; }
+.environment-summary div span { color: #7d8591; font-size: 14px; }
+.environment-checks { margin-top: 20px; border-top: 1px solid var(--line); }
+.environment-check-row { display: grid; grid-template-columns: 32px minmax(240px, 1fr) minmax(160px, .75fr); align-items: center; gap: 14px; min-height: 70px; border-bottom: 1px solid var(--line); }
+.environment-check-state { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: #27825d; background: #e9f7f0; }
+.environment-check-state.warning { color: #a66c20; background: #fff5df; }
+.environment-check-state.error { color: #b44848; background: #fff0f0; }
+.environment-check-main { min-width: 0; display: grid; gap: 6px; }
+.environment-check-main strong { color: #343a44; font-size: 15px; }
+.environment-check-main span { overflow: hidden; color: #858d98; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.environment-check-row code { min-width: 0; overflow: hidden; color: #606976; text-align: right; text-overflow: ellipsis; white-space: nowrap; font: 13px 'DM Mono', monospace; }
+.environment-demo { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 30px 0; border-bottom: 1px solid var(--line); }
+.environment-demo > div { display: grid; gap: 6px; }
+.environment-demo strong { color: #303640; font-size: 17px; }
+.environment-demo span { color: #818a96; font-size: 14px; }
+.environment-demo .primary-button { min-height: 44px; flex: 0 0 auto; }
+.environment-demo-audio { width: min(100%, 620px); height: 42px; margin-top: 22px; }
+.environment-message { display: flex; align-items: center; gap: 9px; margin-top: 20px; color: #59626f; font-size: 14px; }
+.environment-loading { display: flex; align-items: center; gap: 12px; min-height: 240px; color: #7b8490; font-size: 15px; }
 .storage-heading {
   display: flex;
   align-items: flex-start;
@@ -1445,6 +1489,12 @@ body {
   .settings-navigation { gap: 22px; margin-bottom: 28px; overflow-x: auto; }
   .settings-navigation button { flex: 0 0 auto; }
   .storage-heading { flex-direction: column; gap: 18px; }
+  .environment-heading { flex-direction: column; gap: 18px; }
+  .environment-heading .secondary-button { width: 100%; justify-content: center; }
+  .environment-check-row { grid-template-columns: 32px minmax(0, 1fr); padding: 14px 0; }
+  .environment-check-row code { grid-column: 2; text-align: left; }
+  .environment-demo { align-items: stretch; flex-direction: column; }
+  .environment-demo .primary-button { justify-content: center; }
   .storage-heading .secondary-button { width: 100%; justify-content: center; }
   .storage-usage-head { align-items: flex-start; flex-direction: column; gap: 13px; }
   .storage-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }

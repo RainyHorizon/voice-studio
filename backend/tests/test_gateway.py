@@ -24,6 +24,50 @@ def isolated_storage(main):
 
 
 class GatewayEndpointTests(unittest.TestCase):
+    def test_system_diagnostics_report_required_components(self):
+        from app import main
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                frontend = Path(directory) / "dist"
+                frontend.mkdir()
+                (frontend / "index.html").write_text("ready", encoding="utf-8")
+                command_result = {"id": "tool", "label": "tool", "status": "ok", "version": "1.0", "detail": "C:/tool.exe"}
+                with isolated_storage(main), \
+                    patch.object(main, "FRONTEND_DIST", frontend), \
+                    patch.object(main, "_command_diagnostic", side_effect=lambda command, arguments, required: {**command_result, "id": command, "label": command}), \
+                    patch.object(main, "credential_store_status", return_value={"available": True, "backend": "WinVaultKeyring", "message": "可用"}):
+                    transport = httpx.ASGITransport(app=main.app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                        response = await client.get("/api/system/diagnostics")
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload["status"], "ok")
+                self.assertEqual(payload["demo"]["model"], "demo/local-demo")
+                self.assertTrue(any(item["id"] == "credentials" for item in payload["checks"]))
+                self.assertTrue(any(item["id"] == "data" and item["status"] == "ok" for item in payload["checks"]))
+
+        asyncio.run(run())
+
+    def test_local_demo_speech_needs_no_provider_credentials(self):
+        with patch.dict(os.environ, {"VOICE_STUDIO_GATEWAY_KEY": "test_gateway_key"}, clear=False):
+            from app import main
+
+            async def run():
+                transport = httpx.ASGITransport(app=main.app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    response = await client.post(
+                        "/v1/audio/speech",
+                        headers={"Authorization": "Bearer test_gateway_key"},
+                        json={"model": "demo/local-demo", "voice": "local-demo", "input": "本地演示测试", "response_format": "wav"},
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.headers["x-voice-studio-mode"], "demo")
+                    self.assertTrue(response.content.startswith(b"RIFF"))
+
+            with isolated_storage(main):
+                asyncio.run(run())
+
     def test_local_security_guards_and_endpoint_allowlist(self):
         from app import main
 

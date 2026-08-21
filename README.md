@@ -46,13 +46,15 @@ Voice Studio 是一个在 Windows 本地运行的多厂商 AI 语音工作台。
 | --- | --- |
 | 操作系统 | Windows 10 或 Windows 11 |
 | Python | Python 3.11 或更高版本 |
-| Node.js | Node.js 20.19+ 或 22.12+ |
+| Node.js | 仅从源码首次构建前端时需要；Windows Release 不需要 |
 | FFmpeg | `ffmpeg` 和 `ffprobe` 可通过系统 `Path` 调用 |
 | 网络 | 能够访问所使用厂商的官方 API |
 
 ### 下载项目
 
-可以在 GitHub 的 **Code → Download ZIP** 下载并解压，也可以使用 Git：
+普通用户优先下载 GitHub **Releases** 页面中的 `Voice-Studio-*-Windows.zip`。该压缩包已经包含前端文件，运行时不需要安装 Node.js。
+
+使用 GitHub 的 **Code → Download ZIP** 或 Git 克隆得到的是源码版，首次启动需要 Node.js：
 
 ```powershell
 git clone https://github.com/RainyHorizon/voice-studio.git
@@ -67,17 +69,25 @@ cd voice-studio
 启动 Voice Studio.bat
 ```
 
-首次启动会创建 Python 虚拟环境、安装依赖并构建前端，所需时间取决于网络速度。启动完成后会自动打开：
+首次启动会创建 Python 虚拟环境并安装后端依赖；源码版还会构建前端，Windows Release 会跳过这一步。所需时间取决于网络速度，启动完成后会自动打开：
 
 ```text
 http://127.0.0.1:8765
 ```
+
+启动时会检查 Python、FFmpeg、FFprobe、数据目录和 Windows Credential Manager。如果默认端口被其他程序占用，程序会自动尝试 `8766` 至 `8790`，并在窗口中显示实际地址。
 
 也可以在 PowerShell 中启动：
 
 ```powershell
 Set-Location <Voice Studio 所在目录>
 .\start.ps1
+```
+
+需要固定使用其他端口时：
+
+```powershell
+.\start.ps1 -Port 8766 -OpenBrowser
 ```
 
 服务器窗口需要在使用期间保持运行。关闭服务器窗口即可停止 Voice Studio。
@@ -88,6 +98,8 @@ Set-Location <Voice Studio 所在目录>
 2. 填写该厂商的 API Key，Endpoint 通常保持默认值，然后保存账号。
 3. 返回 **合成工作台**，选择厂商、模型和音色。
 4. 输入文字并生成语音，结果会出现在页面下方和 **任务历史** 中。
+
+尚未准备 API Key 时，可以在合成工作台选择 **本地演示 → 本地演示音频**，或进入 **设置 → 运行环境** 点击 **运行演示**。它只在本机生成测试 WAV，不调用厂商接口，也不会消耗额度。
 
 不同厂商使用不同凭据。火山引擎的豆包语音 API Key 用于语音生成；只有同步云端克隆音色时，才需要额外填写 IAM/OpenAPI Access Key ID、Secret Access Key 和项目名称。
 
@@ -102,6 +114,8 @@ Set-Location <Voice Studio 所在目录>
 | API 网关 | 查看本地 Gateway Key、测试接口并查看运行统计 |
 | 任务历史 | 试听、下载、批量导出或删除已生成任务 |
 | 设置 | 配置厂商账号，以及管理音频存储和自动清理策略 |
+
+在 **设置 → 运行环境** 中可以重新检查 Python、FFmpeg、FFprobe、前端文件、Node.js、Credential Manager 和数据目录状态。Node.js 在 Windows Release 中属于可选项。
 
 ## OpenAI 兼容 API
 
@@ -220,7 +234,15 @@ Credential Manager 可以降低明文配置和误提交造成的泄露风险，�
 
 ### 双击启动文件后没有打开页面
 
-检查启动时出现的 **Voice Studio Server** 窗口，其中会显示 Python、Node.js、依赖安装或端口占用错误。也可以通过 PowerShell 运行 `.\start.ps1` 查看完整信息。
+检查启动窗口中的中文诊断结果，其中会明确显示 Python、FFmpeg、依赖安装、凭据存储或端口占用错误。也可以通过 PowerShell 运行 `.\start.ps1` 查看完整信息。
+
+### 提示找不到 Node.js，但我只想使用程序
+
+GitHub 源码不包含前端构建产物，因此源码版首次启动需要 Node.js。普通用户应下载 Releases 页面中的 Windows ZIP，该版本不需要 Node.js。
+
+### 8765 端口被占用怎么办
+
+双击启动时会自动寻找 `8766` 至 `8790`。需要固定端口时运行 `.\start.ps1 -Port 8766 -OpenBrowser`；API 网关页面会显示与实际端口一致的 Base URL。
 
 ### 已填写 API Key，为什么仍然生成失败
 
@@ -256,6 +278,14 @@ Set-Location backend
 ```
 
 普通自动化测试不会调用真实厂商接口。真实语音测试可能消耗额度或产生费用，请在明确了解测试内容后再运行相关脚本。
+
+构建不包含用户数据和密钥的 Windows Release：
+
+```powershell
+.\build-windows-release.ps1
+```
+
+压缩包会生成到 `output\releases`，包含后端代码、预构建前端、启动脚本、README 和许可证，不包含 `data` 中的本地数据库、音频、Gateway Key、虚拟环境或依赖目录。
 
 ## 当前限制
 

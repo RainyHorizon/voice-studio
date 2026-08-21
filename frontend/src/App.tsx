@@ -216,15 +216,33 @@ type ProviderSpec = {
   endpoint_note: string;
   verification: string;
 };
+type DiagnosticCheck = {
+  id: string;
+  label: string;
+  status: "ok" | "warning" | "error";
+  version: string;
+  detail: string;
+};
+type SystemDiagnostics = {
+  status: "ok" | "warning" | "error";
+  platform: string;
+  base_url: string;
+  port: number;
+  checks: DiagnosticCheck[];
+  required_failures: number;
+  demo: { model: string; voice: string; available: boolean };
+};
 const providerMeta: Record<
   string,
   { label: string; mark: string; tone: string }
 > = {
+  demo: { label: "本地演示", mark: "D", tone: "gray" },
   dashscope: { label: "通义千问", mark: "Q", tone: "gold" },
   volcengine: { label: "火山引擎", mark: "V", tone: "red" },
   minimax: { label: "MiniMax", mark: "M", tone: "mint" },
   mimo: { label: "小米 MiMo", mark: "米", tone: "blue" },
 };
+const credentialProviderIds = ["dashscope", "volcengine", "minimax", "mimo"];
 const sample =
   "夜色落在城市边缘，远处的灯一盏一盏亮起来。把这段文字交给不同的声音，听见同一句话里的不同质感。";
 const voiceMatchesModel = (voice?: Voice, model?: Model) =>
@@ -260,8 +278,8 @@ export default function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [text, setText] = useState(sample);
-  const [model, setModel] = useState("mimo/mimo-v2.5-tts");
-  const [voice, setVoice] = useState("mimo-default");
+  const [model, setModel] = useState("demo/local-demo");
+  const [voice, setVoice] = useState("local-demo");
   const [speed, setSpeed] = useState(1);
   const [format, setFormat] = useState("wav");
   const [instructions, setInstructions] = useState("");
@@ -2650,15 +2668,116 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
 }
 
 function Settings({ models, onJobsChanged }: { models: Model[]; onJobsChanged: () => Promise<void> }) {
-  const [section, setSection] = useState<"providers" | "storage">("providers");
+  const [section, setSection] = useState<"providers" | "storage" | "environment">("providers");
   return (
     <section className="page-section settings-shell">
       <div className="settings-navigation" role="tablist" aria-label="设置分类">
         <button className={section === "providers" ? "selected" : ""} type="button" role="tab" aria-selected={section === "providers"} onClick={() => setSection("providers")}><KeyRound size={18} />厂商账号</button>
         <button className={section === "storage" ? "selected" : ""} type="button" role="tab" aria-selected={section === "storage"} onClick={() => setSection("storage")}><HardDrive size={18} />存储与清理</button>
+        <button className={section === "environment" ? "selected" : ""} type="button" role="tab" aria-selected={section === "environment"} onClick={() => setSection("environment")}><ShieldCheck size={18} />运行环境</button>
       </div>
-      {section === "providers" ? <ProviderSettings models={models} /> : <StorageSettings onJobsChanged={onJobsChanged} />}
+      {section === "providers" && <ProviderSettings models={models} />}
+      {section === "storage" && <StorageSettings onJobsChanged={onJobsChanged} />}
+      {section === "environment" && <EnvironmentSettings onJobsChanged={onJobsChanged} />}
     </section>
+  );
+}
+
+function EnvironmentSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void> }) {
+  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [demoAudioUrl, setDemoAudioUrl] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      setDiagnostics(await api<SystemDiagnostics>("/api/system/diagnostics"));
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法读取环境诊断");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { void load(); }, []);
+  useEffect(() => () => { if (demoAudioUrl) URL.revokeObjectURL(demoAudioUrl); }, [demoAudioUrl]);
+
+  const runDemo = async () => {
+    if (!diagnostics?.demo.available) return;
+    setDemoBusy(true);
+    setMessage("正在生成本地演示音频...");
+    try {
+      const gatewayConfig = await api<Gateway>("/api/gateway");
+      const response = await fetch("/v1/audio/speech", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + gatewayConfig.key, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: diagnostics.demo.model,
+          voice: diagnostics.demo.voice,
+          input: "Voice Studio 本地演示音频生成成功。",
+          response_format: "wav",
+        }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const blob = await response.blob();
+      if (demoAudioUrl) URL.revokeObjectURL(demoAudioUrl);
+      setDemoAudioUrl(URL.createObjectURL(blob));
+      setMessage("本地演示通过，未调用厂商接口，也未消耗额度。");
+      await onJobsChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "本地演示失败");
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
+  if (loading && !diagnostics) {
+    return <div className="environment-loading"><RefreshCw size={18} className="spinning" />正在检查运行环境...</div>;
+  }
+  return (
+    <div className="environment-settings-page">
+      <div className="environment-heading">
+        <div>
+          <h2>Windows 运行环境</h2>
+          <p>检查语音生成、音频转换和凭据保存所需的本机组件。</p>
+        </div>
+        <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>
+          <RefreshCw size={16} className={loading ? "spinning" : ""} />重新检查
+        </button>
+      </div>
+      {diagnostics && <>
+        <div className={"environment-summary " + diagnostics.status}>
+          <span className="environment-summary-icon">
+            {diagnostics.status === "error" ? <X size={21} /> : diagnostics.status === "warning" ? <CircleHelp size={21} /> : <Check size={21} />}
+          </span>
+          <div>
+            <strong>{diagnostics.status === "error" ? `${diagnostics.required_failures} 项需要处理` : diagnostics.status === "warning" ? "核心环境可用" : "运行环境正常"}</strong>
+            <span>{diagnostics.base_url} · Windows 本地服务</span>
+          </div>
+        </div>
+        <div className="environment-checks">
+          {diagnostics.checks.map((item) => (
+            <div className="environment-check-row" key={item.id}>
+              <span className={"environment-check-state " + item.status}>
+                {item.status === "ok" ? <Check size={16} /> : item.status === "warning" ? <CircleHelp size={16} /> : <X size={16} />}
+              </span>
+              <div className="environment-check-main"><strong>{item.label}</strong><span>{item.detail}</span></div>
+              <code>{item.version || (item.status === "warning" ? "可选" : "未通过")}</code>
+            </div>
+          ))}
+        </div>
+        <div className="environment-demo">
+          <div><strong>本地演示</strong><span>无需 API Key，生成一段 WAV 来验证完整保存与播放流程。</span></div>
+          <button className="primary-button compact" type="button" onClick={() => void runDemo()} disabled={demoBusy || diagnostics.required_failures > 0}>
+            <FlaskConical size={16} />{demoBusy ? "正在生成" : "运行演示"}
+          </button>
+        </div>
+        {demoAudioUrl && <audio className="environment-demo-audio" controls src={demoAudioUrl} />}
+      </>}
+      {message && <div className="environment-message"><Activity size={15} />{message}</div>}
+    </div>
   );
 }
 
@@ -3003,7 +3122,8 @@ function ProviderSettings({ models }: { models: Model[] }) {
       </div>
       <div className="credential-layout">
         <div className="provider-rail">
-          {Object.entries(providerMeta).map(([id, meta]) => {
+          {credentialProviderIds.map((id) => {
+            const meta = providerMeta[id];
             const count = accounts.filter(
               (item) => item.provider === id,
             ).length;
