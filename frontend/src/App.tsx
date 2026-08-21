@@ -2740,7 +2740,7 @@ function EnvironmentSettings({ onJobsChanged }: { onJobsChanged: () => Promise<v
     <div className="environment-settings-page">
       <div className="environment-heading">
         <div>
-          <h2>Windows 运行环境</h2>
+          <h2>运行环境</h2>
           <p>检查语音生成、音频转换和凭据保存所需的本机组件。</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>
@@ -2754,7 +2754,7 @@ function EnvironmentSettings({ onJobsChanged }: { onJobsChanged: () => Promise<v
           </span>
           <div>
             <strong>{diagnostics.status === "error" ? `${diagnostics.required_failures} 项需要处理` : diagnostics.status === "warning" ? "核心环境可用" : "运行环境正常"}</strong>
-            <span>{diagnostics.base_url} · Windows 本地服务</span>
+            <span>{diagnostics.base_url} · {diagnostics.platform} 本地服务</span>
           </div>
         </div>
         <div className="environment-checks">
@@ -2898,8 +2898,8 @@ function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void>
   const openDirectory = async () => {
     setWorking("directory");
     try {
-      const result = await api<{ opened: boolean; path: string }>("/api/storage/open-directory", { method: "POST" });
-      setMessage(result.opened ? "已打开音频存储目录" : `音频存储目录：${result.path}`);
+      const result = await api<{ opened: boolean; path: string; message?: string }>("/api/storage/open-directory", { method: "POST" });
+      setMessage(result.opened ? "已打开音频存储目录" : `${result.message || "请手动打开音频存储目录"} 路径：${result.path}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法打开存储目录");
     } finally {
@@ -3065,7 +3065,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
       await loadAccounts();
       setEditingId(saved.id);
       setForm((current) => ({ ...current, api_key: "" }));
-      setMessage("凭据已写入 Windows Credential Manager");
+      setMessage("凭据已写入系统密钥环");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败");
     } finally {
@@ -3092,7 +3092,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
   const remove = async () => {
     if (
       !editingId ||
-      !window.confirm("删除这个账号及其 Windows Credential Manager 凭据？")
+      !window.confirm("删除这个账号及其系统密钥环中的凭据？")
     )
       return;
     setWorking(true);
@@ -3116,7 +3116,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
       <div>
         <h2>厂商账号与 API 凭据</h2>
         <p className="settings-lead">
-          API Key 直接写入 Windows Credential Manager。页面和 SQLite
+          API Key 直接写入系统密钥环。页面和 SQLite
           只保存脱敏后缀与 Endpoint，不会回显完整密钥。
         </p>
       </div>
@@ -3163,7 +3163,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
           <div className="security-note">
             <ShieldCheck size={16} />
             <span>
-              密钥由当前 Windows 用户加密保存，其他系统账号无法直接读取。
+              密钥由当前系统用户的密钥环加密保存，其他系统账号无法直接读取。
             </span>
           </div>
         </div>
@@ -3244,7 +3244,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
                   placeholder={
                     current
                       ? "留空则继续使用 " + current.secret_hint
-                      : "粘贴后将直接写入 Windows Credential Manager"
+                      : "粘贴后将直接写入系统密钥环"
                   }
                 />
                 <button

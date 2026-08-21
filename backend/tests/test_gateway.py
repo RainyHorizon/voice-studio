@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -24,6 +25,23 @@ def isolated_storage(main):
 
 
 class GatewayEndpointTests(unittest.TestCase):
+    def test_open_storage_directory_uses_platform_opener_or_returns_headless_path(self):
+        from app import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "audio"
+            with patch.object(main, "AUDIO", audio), patch.object(main.platform, "system", return_value="Linux"), patch.dict(os.environ, {"DISPLAY": "", "WAYLAND_DISPLAY": ""}, clear=True):
+                result = main.open_storage_directory()
+            self.assertFalse(result["opened"])
+            self.assertEqual(result["path"], str(audio.resolve()))
+            self.assertIn("没有图形桌面", result["message"])
+
+            with patch.object(main, "AUDIO", audio), patch.object(main.platform, "system", return_value="Linux"), patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False), patch.object(subprocess, "Popen") as popen:
+                result = main.open_storage_directory()
+            self.assertTrue(result["opened"])
+            popen.assert_called_once()
+            self.assertEqual(popen.call_args.args[0][0], "xdg-open")
+
     def test_system_diagnostics_report_required_components(self):
         from app import main
 

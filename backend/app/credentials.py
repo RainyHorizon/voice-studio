@@ -1,10 +1,22 @@
 import json
+import platform
 
 import keyring
-from keyring.errors import KeyringError
 
 
 SERVICE_NAME = "VoiceStudio.ProviderAccount"
+
+
+def credential_store_name() -> str:
+    """Return a user-facing name without assuming a particular operating system."""
+    system = platform.system()
+    if system == "Windows":
+        return "Windows Credential Manager"
+    if system == "Darwin":
+        return "macOS 钥匙串"
+    if system == "Linux":
+        return "Linux 系统密钥环"
+    return "系统密钥环"
 
 
 class CredentialStoreError(RuntimeError):
@@ -26,8 +38,8 @@ def save_provider_credentials(account_id: str, **credentials: str) -> None:
                 current = {}
         current.update({key: value for key, value in credentials.items() if value})
         keyring.set_password(SERVICE_NAME, account_id, json.dumps(current))
-    except KeyringError as exc:
-        raise CredentialStoreError("无法写入 Windows Credential Manager") from exc
+    except Exception as exc:
+        raise CredentialStoreError(f"无法写入{credential_store_name()}") from exc
 
 
 def load_api_key(account_id: str) -> str | None:
@@ -37,29 +49,30 @@ def load_api_key(account_id: str) -> str | None:
 def load_provider_credentials(account_id: str) -> dict[str, str]:
     try:
         value = keyring.get_password(SERVICE_NAME, account_id)
-    except KeyringError as exc:
-        raise CredentialStoreError("无法读取 Windows Credential Manager") from exc
+    except Exception as exc:
+        raise CredentialStoreError(f"无法读取{credential_store_name()}") from exc
     if not value:
         return {}
     try:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
     except (json.JSONDecodeError, TypeError) as exc:
-        raise CredentialStoreError("Windows Credential Manager 中的凭据格式无效") from exc
+        raise CredentialStoreError(f"{credential_store_name()}中的凭据格式无效") from exc
 
 
 def delete_api_key(account_id: str) -> None:
     try:
         if keyring.get_password(SERVICE_NAME, account_id) is not None:
             keyring.delete_password(SERVICE_NAME, account_id)
-    except KeyringError as exc:
-        raise CredentialStoreError("无法删除 Windows Credential Manager 凭据") from exc
+    except Exception as exc:
+        raise CredentialStoreError(f"无法删除{credential_store_name()}凭据") from exc
 
 
 def credential_store_status() -> dict[str, str | bool]:
     try:
         keyring.get_password(SERVICE_NAME, "__healthcheck__")
         backend = type(keyring.get_keyring()).__name__
-        return {"available": True, "backend": backend, "message": "Windows Credential Manager 可用"}
-    except KeyringError as exc:
-        return {"available": False, "backend": "", "message": f"无法访问 Windows Credential Manager：{exc}"}
+        return {"available": True, "backend": backend, "message": f"{credential_store_name()}可用"}
+    except Exception as exc:
+        # Some keyring backends raise NoKeyringError/RuntimeError instead of KeyringError.
+        return {"available": False, "backend": "", "message": f"无法访问{credential_store_name()}：{exc}"}

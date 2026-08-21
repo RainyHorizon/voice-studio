@@ -4,5 +4,6 @@ python-multipart==0.0.20
 pydantic==2.13.4
 httpx==0.28.1
 keyring==25.7.0
+secretstorage==3.3.3; sys_platform == 'linux'
 dashscope>=1.24.6,<2
 websockets>=13,<18
