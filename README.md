@@ -1,6 +1,6 @@
 # Voice Studio
 
-Voice Studio 是一个在 Windows 本地运行的多厂商 AI 语音工作台。它将通义千问、火山引擎、MiniMax 和小米 MiMo 的语音能力集中在一个界面中，并提供 OpenAI 兼容 API，方便其他应用调用。
+Voice Studio 是一个在 Windows、macOS 和 Linux 本地运行的多厂商 AI 语音工作台。它将通义千问、火山引擎、MiniMax 和小米 MiMo 的语音能力集中在一个界面中，并提供 OpenAI 兼容 API，方便其他应用调用。
 
 ## 功能概览
 
@@ -44,10 +44,11 @@ Voice Studio 是一个在 Windows 本地运行的多厂商 AI 语音工作台。
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | Windows 10 或 Windows 11 |
+| 操作系统 | Windows 10/11、macOS 12+ 或主流 Linux 发行版 |
 | Python | 便携版不需要；轻量版和源码版需要 Python 3.11 或更高版本 |
 | Node.js | 仅从源码首次构建前端时需要 |
 | FFmpeg | 便携版已包含；轻量版和源码版需要加入系统 `Path` |
+| 系统密钥环 | Windows Credential Manager、macOS 钥匙串，或 Linux Secret Service（GNOME Keyring/KWallet） |
 | 网络 | 能够访问所使用厂商的官方 API |
 
 ### 下载项目
@@ -77,7 +78,7 @@ cd voice-studio
 http://127.0.0.1:8765
 ```
 
-启动时会检查 Python、FFmpeg、FFprobe、数据目录和 Windows Credential Manager。如果默认端口被其他程序占用，程序会自动尝试 `8766` 至 `8790`，并在窗口中显示实际地址。
+启动时会检查 Python、FFmpeg、FFprobe、数据目录和当前系统的密钥环。如果默认端口被其他程序占用，Windows 启动脚本会自动尝试 `8766` 至 `8790`；macOS/Linux 请使用 `--port` 指定可用端口。
 
 也可以在 PowerShell 中启动：
 
@@ -92,7 +93,38 @@ Set-Location <Voice Studio 所在目录>
 .\start.ps1 -Port 8766 -OpenBrowser
 ```
 
-服务器窗口需要在使用期间保持运行。关闭服务器窗口即可停止 Voice Studio。
+### macOS / Linux 启动
+
+macOS 和 Linux 使用源码启动。先安装 Python 3.11+、FFmpeg/FFprobe，以及首次构建前端所需的 Node.js 20+，然后在项目目录执行：
+
+```bash
+chmod +x start.sh
+./start.sh --open-browser
+```
+
+`start.sh` 会自动创建 `backend/.venv`、安装后端依赖，并在 `frontend/dist` 不存在或源码更新时构建前端。日常启动只需要 Python、FFmpeg/FFprobe 和系统密钥环；如果已经有预构建前端，则不需要 Node.js。
+
+常用选项：
+
+```bash
+./start.sh                 # 启动服务，不自动打开浏览器
+./start.sh --open-browser # 启动后打开默认浏览器
+./start.sh --port 8766    # 使用其他端口
+```
+
+#### 系统密钥环准备
+
+API Key 不会保存到 `.env` 或 SQLite，而是写入当前用户的系统密钥环：
+
+| 系统 | 使用的安全存储 | 准备方式 |
+| --- | --- | --- |
+| macOS | 钥匙串（Keychain） | 系统自带；首次写入时允许终端或 Python 访问钥匙串 |
+| Linux 桌面 | Secret Service | 安装并启动 GNOME Keyring 或 KWallet，确保当前桌面会话有 D-Bus 密钥环 |
+| Linux 服务器/SSH | 取决于会话 | 需要配置可用的 Secret Service 会话；没有图形会话时“打开目录”只返回路径，服务不会伪造明文存储 |
+
+Linux 安装依赖时会自动安装 Python `secretstorage` 包。如果诊断仍显示密钥环不可用，请先登录桌面会话并解锁密钥环，再重新运行 `./start.sh`。不要通过 `KEYRING_BACKEND` 切换到明文后端。
+
+启动终端需要在使用期间保持运行。按 `Ctrl+C` 或关闭终端即可停止 Voice Studio。
 
 ## 首次使用
 
@@ -117,7 +149,7 @@ Set-Location <Voice Studio 所在目录>
 | 任务历史 | 试听、下载、批量导出或删除已生成任务 |
 | 设置 | 配置厂商账号，以及管理音频存储和自动清理策略 |
 
-在 **设置 → 运行环境** 中可以重新检查 Python、FFmpeg、FFprobe、前端文件、Node.js、Credential Manager 和数据目录状态。Node.js 在 Windows Release 中属于可选项。
+在 **设置 → 运行环境** 中可以重新检查 Python、FFmpeg、FFprobe、前端文件、Node.js、系统密钥环和数据目录状态。预构建前端存在时，Node.js 属于可选项。
 
 ## OpenAI 兼容 API
 
@@ -183,7 +215,7 @@ await writeFile("speech.mp3", Buffer.from(await response.arrayBuffer()));
 | 生成音频和参考音频 | `data/audio` |
 | 任务、音色和账号元数据 | `data/voice_studio.db` |
 | 本地 Gateway Key | `data/gateway.json`，或由 `VOICE_STUDIO_GATEWAY_KEY` 环境变量提供 |
-| 厂商 API Key、火山引擎 AK/SK | Windows Credential Manager |
+| 厂商 API Key、火山引擎 AK/SK | 当前用户的系统密钥环 |
 | 测试输出 | `output` |
 
 在 **设置 → 存储与清理** 中可以配置：
@@ -199,7 +231,7 @@ await writeFile("speech.mp3", Buffer.from(await response.arrayBuffer()));
 
 ## 安全说明
 
-- 厂商 API Key 与火山引擎 AK/SK 通过 Windows Credential Manager 保存，不写入项目配置文件、SQLite 数据库或前端构建产物。
+- 厂商 API Key 与火山引擎 AK/SK 通过当前系统的安全密钥环保存，不写入项目配置文件、SQLite 数据库或前端构建产物。
 - 账号接口只显示脱敏后的密钥末四位，不会向前端返回完整厂商密钥。
 - `data`、`output`、日志、虚拟环境、依赖和构建目录均已通过 `.gitignore` 排除。
 - 服务默认只监听 `127.0.0.1:8765`，请勿直接改为 `0.0.0.0` 或暴露到公网。
@@ -207,7 +239,7 @@ await writeFile("speech.mp3", Buffer.from(await response.arrayBuffer()));
 - 自定义厂商 Endpoint 可能导致密钥被发送到第三方地址。没有明确需要时，请使用程序预填的官方 Endpoint。
 - 声音克隆前必须获得声音所有者授权，并遵守当地法律和厂商使用条款。
 
-Credential Manager 可以降低明文配置和误提交造成的泄露风险，但不能抵御已经控制当前 Windows 账户的恶意程序。请同时保护 Windows 账户，并在怀疑泄露时立即前往厂商控制台轮换密钥。
+系统密钥环可以降低明文配置和误提交造成的泄露风险，但不能抵御已经控制当前用户账户的恶意程序。请同时保护操作系统账户，并在怀疑泄露时立即前往厂商控制台轮换密钥。
 
 ## 技术架构
 
@@ -216,7 +248,7 @@ Credential Manager 可以降低明文配置和误提交造成的泄露风险，�
 | 前端 | React 19、TypeScript、Vite |
 | 后端 | FastAPI、Python |
 | 本地数据库 | SQLite |
-| 凭据存储 | Windows Credential Manager |
+| 凭据存储 | Windows Credential Manager / macOS Keychain / Linux Secret Service |
 | 厂商连接 | HTTP、WebSocket |
 | 兼容接口 | OpenAI 风格 REST API、SSE |
 
@@ -301,7 +333,7 @@ Set-Location backend
 
 ## 当前限制
 
-- 当前版本主要面向 Windows 单用户本地运行，不是云端多用户服务。
+- 当前版本主要面向单用户本地运行，不是云端多用户服务；Windows 便携版仍是最省事的分发方式。
 - 厂商可能调整模型名称、接口、计费方式和权限要求。
 - 声音克隆与声音设计能力取决于账号权限和厂商音色槽位。
 - API 网关以本地兼容和应用接入为目标，不保证覆盖 OpenAI API 的全部字段。

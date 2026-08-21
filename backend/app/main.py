@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .credentials import CredentialStoreError, credential_store_status, delete_api_key, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
+from .credentials import CredentialStoreError, credential_store_name, credential_store_status, delete_api_key, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
 from .providers.base import ProviderError, SynthesisRequest
 from .providers.demo import DemoProvider
 from .providers.mimo import DEFAULT_ENDPOINT as MIMO_ENDPOINT
@@ -636,7 +636,7 @@ def provider_for(model_provider: str):
     except CredentialStoreError as exc:
         raise ProviderError(str(exc), code="credential_store_error", status=503) from exc
     if not api_key:
-        raise ProviderError(f"Windows Credential Manager 中没有找到{provider_name}凭据", code="provider_not_configured", status=409)
+        raise ProviderError(f"{credential_store_name()}中没有找到{provider_name}凭据", code="provider_not_configured", status=409)
     try:
         endpoint = validate_provider_endpoint(model_provider, row["endpoint"] or PROVIDER_SPECS[model_provider]["default_endpoint"])
     except ValueError as exc:
@@ -919,7 +919,7 @@ async def test_provider_account(account_id: str):
     except CredentialStoreError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not api_key:
-        raise HTTPException(409, "Windows Credential Manager 中没有找到该账号的凭据")
+        raise HTTPException(409, f"{credential_store_name()}中没有找到该账号的凭据")
     try:
         endpoint = validate_provider_endpoint(row["provider"], row["endpoint"] or PROVIDER_SPECS[row["provider"]]["default_endpoint"])
     except ValueError as exc:
@@ -1032,7 +1032,7 @@ async def test_provider_account(account_id: str):
             status = "error"
             message = "无法读取 MiMo 模型列表，请检查网络和 Endpoint。"
     else:
-        message = "凭据已从 Windows Credential Manager 成功读取；真实鉴权将在该厂商适配器接入后启用。"
+        message = f"凭据已从{credential_store_name()}成功读取；真实鉴权将在该厂商适配器接入后启用。"
 
     with db() as connection:
         connection.execute("UPDATE provider_accounts SET status=?,verification_message=?,last_verified_at=?,updated_at=? WHERE id=?", (status, message, verified_at, now(), account_id))
@@ -2045,13 +2045,24 @@ def clean_storage_now():
 @app.post("/api/storage/open-directory")
 def open_storage_directory():
     AUDIO.mkdir(parents=True, exist_ok=True)
-    if os.name != "nt":
-        return {"opened": False, "path": str(AUDIO.resolve())}
+    path = AUDIO.resolve()
     try:
-        subprocess.Popen(["explorer.exe", str(AUDIO.resolve())])
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif system == "Darwin":
+            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif system == "Linux":
+            # A server or SSH session may have no desktop session. Return the
+            # path instead of failing when no graphical session is available.
+            if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                return {"opened": False, "path": str(path), "message": "当前 Linux 会话没有图形桌面，请手动打开该路径。"}
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            return {"opened": False, "path": str(path), "message": "当前系统没有可用的目录打开器，请手动打开该路径。"}
     except OSError as exc:
-        raise HTTPException(500, f"无法打开存储目录：{exc}") from exc
-    return {"opened": True, "path": str(AUDIO.resolve())}
+        return {"opened": False, "path": str(path), "message": f"无法自动打开目录，请手动打开：{exc}"}
+    return {"opened": True, "path": str(path), "message": "已请求系统文件管理器打开目录。"}
 
 
 @app.get("/api/gateway/stats")

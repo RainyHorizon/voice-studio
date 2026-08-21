@@ -140,7 +140,7 @@ try {
   }
 
   $keyringBackend = & $pythonExecutable -c "import keyring; keyring.get_password('VoiceStudio.ProviderAccount', '__healthcheck__'); print(type(keyring.get_keyring()).__name__)"
-  if ($LASTEXITCODE -ne 0) { throw "Windows Credential Manager 无法访问，请确认当前 Windows 用户配置正常。" }
+  if ($LASTEXITCODE -ne 0) { throw "系统密钥环无法访问，请确认当前用户的凭据存储配置正常。" }
   Write-Step "凭据存储可用（$keyringBackend）"
 
   $voiceStudioUrl = "http://127.0.0.1:$Port"
