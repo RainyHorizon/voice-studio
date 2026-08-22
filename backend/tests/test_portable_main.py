@@ -61,7 +61,7 @@ class PortableEnvironmentTests(unittest.TestCase):
 
     def test_prepare_environment_reports_missing_bundle_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            with self.assertRaisesRegex(RuntimeError, "tools\\\\ffmpeg.exe"):
+            with self.assertRaisesRegex(RuntimeError, r"tools[\\/]ffmpeg\.exe"):
                 portable_main.prepare_environment(Path(temp_dir), 8877)
 
 

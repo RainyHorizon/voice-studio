@@ -1,0 +1,17 @@
+.git
+.github
+.pytest_cache
+backend/.venv
+backend/__pycache__
+backend/tests
+frontend/node_modules
+frontend/dist
+data
+output
+*.log
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example

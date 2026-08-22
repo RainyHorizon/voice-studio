@@ -126,6 +126,65 @@ Linux 安装依赖时会自动安装 Python `secretstorage` 包。如果诊断�
 
 启动终端需要在使用期间保持运行。按 `Ctrl+C` 或关闭终端即可停止 Voice Studio。
 
+### Docker 启动
+
+Docker 版本适合服务器或不希望安装 Python/Node.js 的环境。它使用 Docker volume 或宿主机 `data` 目录保存 SQLite、任务历史和音频，并通过环境变量读取厂商密钥。容器不会读取宿主机的 Windows Credential Manager、macOS 钥匙串或 Linux 密钥环。
+
+```bash
+cp .env.example .env
+# 编辑 .env，至少设置 VOICE_STUDIO_GATEWAY_KEY
+docker compose up -d --build
+```
+
+服务默认只绑定到本机 `http://127.0.0.1:8765`。查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f voice-studio
+```
+
+停止服务但保留 `data`：
+
+```bash
+docker compose down
+```
+
+Docker 环境变量账号会在页面中显示为“Docker 环境变量”，只能通过 `.env` 或部署平台 Secret 修改，不能在网页中覆盖。修改 `.env` 后需要重新创建容器（`docker compose up -d`）才能生效。支持的变量如下：
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `VOICE_STUDIO_GATEWAY_KEY` | OpenAI 兼容网关的 Bearer Key，必填 |
+| `VOICE_STUDIO_DASHSCOPE_API_KEY` | 通义千问 API Key |
+| `VOICE_STUDIO_VOLCENGINE_API_KEY` | 火山引擎语音 API Key |
+| `VOICE_STUDIO_VOLCENGINE_OPENAPI_ACCESS_KEY` | 火山引擎云端音色同步 AK |
+| `VOICE_STUDIO_VOLCENGINE_OPENAPI_SECRET_KEY` | 火山引擎云端音色同步 SK |
+| `VOICE_STUDIO_VOLCENGINE_PROJECT_NAME` | 火山引擎项目名称 |
+| `VOICE_STUDIO_MINIMAX_API_KEY` | MiniMax API Key |
+| `VOICE_STUDIO_MIMO_API_KEY` | 小米 MiMo API Key |
+
+不要把 `.env` 提交到 GitHub，也不要把密钥写入 Dockerfile、Compose 文件、镜像标签或 GitHub Actions 日志。公网部署还需要 HTTPS 反向代理、访问控制和请求限流；当前 Compose 默认仅允许本机访问。
+
+### GitHub Actions 自动构建
+
+仓库内置三类工作流：
+
+| 工作流 | 触发条件 | 作用 |
+| --- | --- | --- |
+| `CI` | 推送或 PR 到 `main` | 在 Ubuntu、macOS、Windows 上安装依赖、构建前端、运行测试，并验证 Docker 镜像和 Compose 配置 |
+| `Build Release Assets` | 推送 `v*.*.*` Tag | 生成 Windows 轻量 ZIP，以及 macOS/Linux 的预构建前端源码包，并创建 GitHub Release |
+| `Publish Docker Image` | 推送 `v*.*.*` Tag，或手动运行 | 构建并推送 `linux/amd64`、`linux/arm64` 镜像到 `ghcr.io` |
+
+macOS/Linux Release 当前是“预构建前端源码包”，仍需系统 Python、FFmpeg 和密钥环；它不是签名的 `.app`、`.dmg` 或 AppImage。若未来增加原生安装器，还需要分别处理 macOS 公证、Windows 代码签名和 Linux 发行版兼容性。
+
+发布版本时，先将代码合并到 `main`，再创建版本 Tag，例如：
+
+```bash
+git tag v0.6.0
+git push origin v0.6.0
+```
+
+Actions 会自动运行测试、构建平台包、创建 Release，并推送对应版本的 Docker 镜像。GitHub Actions 不需要厂商 API Key；这些 Key 只在用户部署 Docker 容器时通过 `.env` 或 Secret 注入。
+
 ## 首次使用
 
 1. 打开左侧 **设置**，选择需要使用的语音厂商。
@@ -248,7 +307,7 @@ await writeFile("speech.mp3", Buffer.from(await response.arrayBuffer()));
 | 前端 | React 19、TypeScript、Vite |
 | 后端 | FastAPI、Python |
 | 本地数据库 | SQLite |
-| 凭据存储 | Windows Credential Manager / macOS Keychain / Linux Secret Service |
+| 凭据存储 | Windows Credential Manager / macOS Keychain / Linux Secret Service / Docker 环境变量 |
 | 厂商连接 | HTTP、WebSocket |
 | 兼容接口 | OpenAI 风格 REST API、SSE |
 
