@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .credentials import CredentialStoreError, credential_store_name, credential_store_status, delete_api_key, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
+from .credentials import CredentialStoreError, credential_store_name, credential_store_status, delete_api_key, environment_credentials_enabled, environment_provider_credentials, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
 from .providers.base import ProviderError, SynthesisRequest
 from .providers.demo import DemoProvider
 from .providers.mimo import DEFAULT_ENDPOINT as MIMO_ENDPOINT
@@ -99,7 +99,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version="0.5.0")
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "0.5.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
@@ -186,6 +186,42 @@ def available_models():
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def sync_environment_accounts(connection: sqlite3.Connection) -> None:
+    """Expose explicitly configured Docker credentials as read-only account metadata."""
+    if not environment_credentials_enabled():
+        return
+    provider_names = {"dashscope": "通义千问", "volcengine": "火山引擎", "minimax": "MiniMax", "mimo": "小米 MiMo"}
+    for provider, display_name in provider_names.items():
+        credentials = environment_provider_credentials(provider)
+        if not credentials.get("api_key"):
+            continue
+        account_id = "env_" + provider
+        timestamp = now()
+        project_name = os.getenv("VOICE_STUDIO_VOLCENGINE_PROJECT_NAME", "").strip() if provider == "volcengine" else None
+        connection.execute(
+            """INSERT INTO provider_accounts
+               (id, provider, display_name, account_ref, region, endpoint, status, secret_hint,
+                verification_scope, verification_message, created_at, updated_at, last_verified_at)
+               VALUES (?, ?, ?, ?, NULL, ?, 'configured', ?, 'environment', ?, ?, ?, NULL)
+               ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,
+                 account_ref=excluded.account_ref, endpoint=excluded.endpoint,
+                 status='configured', secret_hint=excluded.secret_hint,
+                 verification_scope='environment', verification_message=excluded.verification_message,
+                 updated_at=excluded.updated_at, last_verified_at=NULL""",
+            (
+                account_id,
+                provider,
+                f"{display_name} · Docker 环境变量",
+                project_name,
+                PROVIDER_SPECS[provider]["default_endpoint"],
+                "••••" + credentials["api_key"][-4:],
+                "由 Docker 环境变量提供，不能在页面中修改。",
+                timestamp,
+                timestamp,
+            ),
+        )
 
 
 @contextmanager
@@ -356,6 +392,7 @@ def init_db() -> None:
                 for remote_id, display_name, alias in minimax_voices
             ],
         )
+        sync_environment_accounts(connection)
         if connection.execute("SELECT COUNT(*) FROM gateway_clients").fetchone()[0] == 0:
             key = gateway_key()
             connection.execute("INSERT INTO gateway_clients VALUES (?,?,?,?,?,?,?)", ("client_demo", "本地演示客户端", hashlib.sha256(key.encode()).hexdigest(), key[:10], "active", now(), None))

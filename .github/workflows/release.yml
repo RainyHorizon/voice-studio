@@ -1,0 +1,103 @@
+name: Build Release Assets
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Windows light package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: .\build-windows-release.ps1 -Version ($env:RELEASE_VERSION -replace '^v', '')
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: output/releases/Voice-Studio-*-Windows.zip
+
+  unix:
+    name: ${{ matrix.os }} source package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FFmpeg
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y ffmpeg
+          else
+            brew install ffmpeg
+          fi
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Create source package
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          PLATFORM_LABEL: ${{ matrix.label }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          package="Voice-Studio-${version}-${PLATFORM_LABEL}"
+          mkdir -p "dist/${package}/frontend" "dist/${package}/backend"
+          cp -R backend/app "dist/${package}/backend/"
+          cp backend/requirements.txt "dist/${package}/backend/"
+          cp -R frontend/dist "dist/${package}/frontend/"
+          cp start.sh README.md LICENSE .gitattributes "dist/${package}/"
+          tar -czf "dist/${package}.tar.gz" -C dist "${package}"
+      - name: Upload Unix package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}-package
+          path: dist/*.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [windows, unix]
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          tag="${RELEASE_VERSION#v}"
+          if [[ "${RELEASE_VERSION}" != v* ]]; then tag="v${tag}"; fi
+          gh release create "$tag" release-assets/* --repo "${GITHUB_REPOSITORY}" \
+            --title "Voice Studio ${tag}" --generate-notes --verify-tag

@@ -42,6 +42,26 @@ class GatewayEndpointTests(unittest.TestCase):
             popen.assert_called_once()
             self.assertEqual(popen.call_args.args[0][0], "xdg-open")
 
+    def test_docker_environment_credentials_create_read_only_account_metadata(self):
+        from app import main
+        from app.credentials import CredentialStoreError, load_api_key, save_api_key
+
+        with patch.dict(
+            os.environ,
+            {
+                "VOICE_STUDIO_CREDENTIALS_MODE": "env",
+                "VOICE_STUDIO_MIMO_API_KEY": "mimo-docker-secret",
+            },
+            clear=False,
+        ), isolated_storage(main):
+            with main.db() as connection:
+                row = connection.execute("SELECT * FROM provider_accounts WHERE id='env_mimo'").fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["status"], "configured")
+            self.assertEqual(load_api_key("env_mimo"), "mimo-docker-secret")
+            with self.assertRaisesRegex(CredentialStoreError, "环境变量凭据"):
+                save_api_key("env_mimo", "replacement")
+
     def test_system_diagnostics_report_required_components(self):
         from app import main
 
