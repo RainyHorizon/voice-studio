@@ -4,7 +4,7 @@ services:
     build:
       context: .
       args:
-        VERSION: ${VOICE_STUDIO_VERSION:-dev}
+        VERSION: ${VOICE_STUDIO_VERSION:-0.6.0}
         REVISION: ${VOICE_STUDIO_REVISION:-local}
         CREATED: ${VOICE_STUDIO_CREATED:-local}
     container_name: voice-studio
