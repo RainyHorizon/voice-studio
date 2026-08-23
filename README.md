@@ -273,7 +273,7 @@ python -m pytest -q tests
 | 工作流 | 触发条件 | 作用 |
 | --- | --- | --- |
 | <code>CI</code> | 推送或 PR 到 <code>main</code> | 三平台测试、前端构建、Docker 构建验证 |
-| <code>Build Release Assets</code> | 推送 <code>v*.*.*</code> 标签 | 生成 Windows ZIP、macOS/Linux 源码包并创建 Release |
+| <code>Build Release Assets</code> | 推送 <code>v*.*.*</code> 标签 | 生成 Windows 轻量 ZIP、macOS/Linux 源码包并创建 Release |
 | <code>Publish Docker Image</code> | 推送版本标签，或手动运行 | 发布 <code>linux/amd64</code>、<code>linux/arm64</code> GHCR 镜像 |
 
 发布新版本时，先合并代码到 <code>main</code>，再创建并推送标签：
@@ -283,7 +283,7 @@ git tag v0.6.0
 git push origin v0.6.0
 ~~~
 
-GitHub Actions 会自动构建发布附件和 Docker 镜像。当前 macOS/Linux 发布包是预构建前端的源码包，不是签名的 <code>.app</code>、<code>.dmg</code> 或 AppImage。
+GitHub Actions 会自动构建 Windows 轻量版、macOS/Linux 发布包和 Docker 镜像。Windows 便携版当前需要在 Windows 构建机执行 <code>.\build-windows-portable.ps1 -Version 0.6.0</code>，再将生成的 ZIP 和 <code>.sha256</code> 文件补充上传到同一个 Release。当前 macOS/Linux 发布包是预构建前端的源码包，不是签名的 <code>.app</code>、<code>.dmg</code> 或 AppImage。
 
 ## 当前限制
 
