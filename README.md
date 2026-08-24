@@ -283,7 +283,7 @@ git tag v0.6.0
 git push origin v0.6.0
 ~~~
 
-GitHub Actions 会自动构建 Windows 轻量版、macOS/Linux 发布包和 Docker 镜像。Windows 便携版当前需要在 Windows 构建机执行 <code>.\build-windows-portable.ps1 -Version 0.6.0</code>，再将生成的 ZIP 和 <code>.sha256</code> 文件补充上传到同一个 Release。当前 macOS/Linux 发布包是预构建前端的源码包，不是签名的 <code>.app</code>、<code>.dmg</code> 或 AppImage。
+GitHub Actions 会自动构建 Windows 轻量版、Windows 便携版（含 <code>.sha256</code> 校验文件）、macOS/Linux 发布包和 Docker 镜像。当前 macOS/Linux 发布包是预构建前端的源码包，不是签名的 <code>.app</code>、<code>.dmg</code> 或 AppImage。
 
 ## 当前限制
 
