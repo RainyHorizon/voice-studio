@@ -44,9 +44,15 @@ function Test-VoiceStudio([int]$Candidate) {
 function Get-CommandVersion([string]$Command, [string[]]$Arguments) {
   $resolved = Get-Command $Command -ErrorAction SilentlyContinue
   if (-not $resolved) { throw "未找到 $Command，请先安装并加入系统 Path。" }
-  $output = & $resolved.Source @Arguments 2>&1 | Select-Object -First 1
-  if ($LASTEXITCODE -ne 0) { throw "$Command 无法正常运行。" }
-  return [string]$output
+  # 先完整读取原生命令输出，再截取首行，避免提前关闭管道导致退出码变为 -1。
+  $output = @(& $resolved.Source @Arguments 2>&1)
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    $detail = [string]($output | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($detail)) { throw "$Command 无法正常运行（退出码 $exitCode）。" }
+    throw "$Command 无法正常运行（退出码 $exitCode）：$detail"
+  }
+  return [string]($output | Select-Object -First 1)
 }
 
 try {
