@@ -138,7 +138,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
-          tag="${RELEASE_VERSION#v}"
-          if [[ "${RELEASE_VERSION}" != v* ]]; then tag="v${tag}"; fi
+          tag="${RELEASE_VERSION}"
+          if [[ "${tag}" != v* ]]; then tag="v${tag}"; fi
           gh release create "$tag" release-assets/* --repo "${GITHUB_REPOSITORY}" \
             --title "Voice Studio ${tag}" --generate-notes --verify-tag
