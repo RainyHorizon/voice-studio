@@ -1,10 +1,10 @@
 services:
   voice-studio:
-    image: ghcr.io/rainyhorizon/voice-studio:${VOICE_STUDIO_VERSION:-0.8.0}
+    image: ghcr.io/rainyhorizon/voice-studio:${VOICE_STUDIO_VERSION:-0.9.0}
     build:
       context: .
       args:
-        VERSION: ${VOICE_STUDIO_VERSION:-0.8.0}
+        VERSION: ${VOICE_STUDIO_VERSION:-0.9.0}
         REVISION: ${VOICE_STUDIO_REVISION:-local}
         CREATED: ${VOICE_STUDIO_CREATED:-local}
     container_name: voice-studio
@@ -14,7 +14,7 @@ services:
       - "127.0.0.1:${VOICE_STUDIO_HOST_PORT:-8765}:8765"
     environment:
       VOICE_STUDIO_CREDENTIALS_MODE: env
-      VOICE_STUDIO_VERSION: ${VOICE_STUDIO_VERSION:-0.8.0}
+      VOICE_STUDIO_VERSION: ${VOICE_STUDIO_VERSION:-0.9.0}
       VOICE_STUDIO_ALLOWED_ORIGINS: http://127.0.0.1:${VOICE_STUDIO_HOST_PORT:-8765},http://localhost:${VOICE_STUDIO_HOST_PORT:-8765}
       VOICE_STUDIO_GATEWAY_KEY: ${VOICE_STUDIO_GATEWAY_KEY:?Set VOICE_STUDIO_GATEWAY_KEY in .env}
       VOICE_STUDIO_DASHSCOPE_API_KEY: ${VOICE_STUDIO_DASHSCOPE_API_KEY:-}

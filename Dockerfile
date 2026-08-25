@@ -8,7 +8,7 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM python:3.12-slim AS runtime
-ARG VERSION=0.8.0
+ARG VERSION=0.9.0
 ARG REVISION=unknown
 ARG CREATED=unknown
 
