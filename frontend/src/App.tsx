@@ -25,6 +25,7 @@ import {
   ListChecks,
   Mic2,
   Pause,
+  Pencil,
   Plus,
   Play,
   Radio,
@@ -236,7 +237,7 @@ const providerMeta: Record<
   string,
   { label: string; mark: string; tone: string }
 > = {
-  demo: { label: "本地演示", mark: "D", tone: "gray" },
+  demo: { label: "离线测试", mark: "D", tone: "gray" },
   dashscope: { label: "通义千问", mark: "Q", tone: "gold" },
   volcengine: { label: "火山引擎", mark: "V", tone: "red" },
   minimax: { label: "MiniMax", mark: "M", tone: "mint" },
@@ -278,8 +279,8 @@ export default function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [text, setText] = useState(sample);
-  const [model, setModel] = useState("demo/local-demo");
-  const [voice, setVoice] = useState("local-demo");
+  const [model, setModel] = useState("");
+  const [voice, setVoice] = useState("");
   const [speed, setSpeed] = useState(1);
   const [format, setFormat] = useState("wav");
   const [instructions, setInstructions] = useState("");
@@ -287,7 +288,6 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [gateway, setGateway] = useState<Gateway | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const selectedModel = useMemo(
     () => models.find((item) => item.gateway_id === model),
     [models, model],
@@ -310,8 +310,18 @@ export default function App() {
       api<Gateway>("/api/gateway"),
     ])
       .then(([v, m, j, g]) => {
-        setVoices(v);
-        setModels(m);
+        const realVoices = v.filter((item) => item.provider !== "demo");
+        const realModels = m.filter((item) => item.provider !== "demo");
+        setVoices(realVoices);
+        setModels(realModels);
+        setModel((current) =>
+          realModels.some((item) => item.gateway_id === current)
+            ? current
+            : realModels.find((item) => item.operations.includes("synthesis"))?.gateway_id || "",
+        );
+        setVoice((current) =>
+          realVoices.some((item) => item.public_name === current) ? current : "",
+        );
         setJobs(j);
         setGateway(g);
       })
@@ -412,8 +422,16 @@ export default function App() {
       setNotice(error instanceof Error ? error.message : "删除失败");
     }
   };
-  const cloneVoice = async (config: CloneConfig) => {
-    const file = fileRef.current?.files?.[0];
+  const renameVoice = async (item: Voice, displayName: string) => {
+    const result = await api<{ voice: Voice; message: string }>("/api/voices/" + item.id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: displayName }),
+    });
+    setVoices((current) => current.map((voiceItem) => voiceItem.id === item.id ? result.voice : voiceItem));
+    setNotice(result.message);
+  };
+  const cloneVoice = async (config: CloneConfig, file: File) => {
     if (!file) return setNotice("请选择一段参考音频");
     const query = new URLSearchParams({
       provider_name: config.provider,
@@ -468,10 +486,10 @@ export default function App() {
     setActive("synthesize");
   };
   const nav = [
-    { id: "synthesize", label: "合成工作台", icon: AudioLines },
+    { id: "synthesize", label: "语音合成", icon: AudioLines },
     { id: "voices", label: "音色库", icon: Library },
-    { id: "clone", label: "声音克隆", icon: Mic2 },
-    { id: "design", label: "声音设计", icon: WandSparkles },
+    { id: "clone", label: "语音克隆", icon: Mic2 },
+    { id: "design", label: "语音设计", icon: WandSparkles },
     { id: "gateway", label: "API 网关", icon: Code2 },
     { id: "history", label: "任务历史", icon: Clock3 },
     { id: "settings", label: "设置", icon: Settings2 },
@@ -518,7 +536,7 @@ export default function App() {
         </nav>
       </aside>
       <main className="main-area">
-        <header className="topbar">
+        <header className="topbar visually-hidden">
           <h1>{titleFor(active)}</h1>
         </header>
         {notice && (
@@ -549,7 +567,6 @@ export default function App() {
             setInstructions={setInstructions}
             audioUrl={audioUrl}
             selectedVoice={selectedVoice}
-            jobs={jobs}
             busy={busy}
             synthesize={synthesize}
             setActive={setActive}
@@ -563,11 +580,12 @@ export default function App() {
             onImport={importVoice}
             onBatchImport={importVoices}
             onRemove={removeVoice}
+            onRename={renameVoice}
             onUse={useVoice}
           />
         )}
         {active === "clone" && (
-          <ClonePanel fileRef={fileRef} models={models} onClone={cloneVoice} />
+          <ClonePanel models={models} onClone={cloneVoice} onNotice={setNotice} />
         )}
         {active === "design" && (
           <VoiceDesignPanel models={models} onDesign={designVoice} />
@@ -575,7 +593,7 @@ export default function App() {
         {active === "gateway" && (
           <GatewayPanel gateway={gateway} models={models} voices={voices} />
         )}
-        {active === "history" && <History jobs={jobs} onRefresh={refreshJobs} />}
+        {active === "history" && <History jobs={jobs} voices={voices} onRefresh={refreshJobs} />}
         {active === "settings" && <Settings models={models} onJobsChanged={refreshJobs} />}
       </main>
     </div>
@@ -585,15 +603,85 @@ export default function App() {
 function titleFor(active: string) {
   return (
     {
-      synthesize: "把文字变成可听见的质感",
+      synthesize: "语音合成",
       voices: "音色库",
-      clone: "声音克隆",
-      design: "声音设计",
+      clone: "语音克隆",
+      design: "语音设计",
       gateway: "OpenAI 兼容网关",
       history: "任务历史",
       settings: "设置",
     } as Record<string, string>
   )[active];
+}
+
+function WorkspaceHero({
+  title,
+  accent,
+  description,
+  className = "",
+}: {
+  title: string;
+  accent: string;
+  description?: string;
+  className?: string;
+}) {
+  return (
+    <div className={`workspace-hero${className ? ` ${className}` : ""}`}>
+      <h2>
+        {title}
+        <br />
+        <em>{accent}</em>
+      </h2>
+      {description && <p>{description}</p>}
+    </div>
+  );
+}
+
+type ProviderSelectorOption = {
+  id: string;
+  label: string;
+  mark: string;
+  tone: string;
+  detail: string;
+  indicator?: "active" | "saved" | "idle";
+};
+
+function ProviderSelector({
+  options,
+  value,
+  onChange,
+  label,
+  className = "",
+}: {
+  options: ProviderSelectorOption[];
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <div className={`provider-selector${className ? ` ${className}` : ""}`} role="tablist" aria-label={label}>
+      {options.map((option) => (
+        <button
+          className={value === option.id ? "provider-choice selected" : "provider-choice"}
+          type="button"
+          role="tab"
+          aria-selected={value === option.id}
+          onClick={() => onChange(option.id)}
+          key={option.id}
+        >
+          <span className={`provider-mark ${option.tone}`}>{option.mark}</span>
+          <span className="provider-choice-copy">
+            <strong>{option.label}</strong>
+            <small>{option.detail}</small>
+          </span>
+          {option.indicator && (
+            <span className={`provider-choice-indicator ${option.indicator}`} aria-hidden="true" />
+          )}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function Synthesis(props: {
@@ -614,13 +702,11 @@ function Synthesis(props: {
   setInstructions: (value: string) => void;
   audioUrl: string;
   selectedVoice?: Voice;
-  jobs: Job[];
   busy: boolean;
   synthesize: () => void;
   setActive: (value: string) => void;
 }) {
   const p = props;
-  const [sidePanel, setSidePanel] = useState<"settings" | "history">("settings");
   const synthesisModels = p.models.filter((item) =>
     item.operations.includes("synthesis"),
   );
@@ -641,10 +727,25 @@ function Synthesis(props: {
     const first = synthesisModels.find((item) => item.provider === provider);
     if (first) p.setModel(first.gateway_id);
   };
+  const speedPosition = p.speed <= 1
+    ? ((p.speed - 0.5) / 0.5) * 50
+    : 50 + ((p.speed - 1) / 1) * 50;
+  const changeSpeed = (position: number) => {
+    const speed = position <= 50
+      ? 0.5 + (position / 50) * 0.5
+      : 1 + ((position - 50) / 50);
+    p.setSpeed(Math.round(speed * 10) / 10);
+  };
 
   return (
-    <section className="synthesis-layout">
-      <div className="editor-column">
+    <section className="synthesis-workspace">
+      <WorkspaceHero
+        title="把文字变成"
+        accent="可听见的质感。"
+        description="输入一段文字，选择合适的厂商、模型与音色，生成自然流畅的语音。"
+      />
+      <div className="synthesis-layout">
+        <div className="editor-column">
         <div className="section-heading">
           <div>
             <h2>输入一段文字</h2>
@@ -673,217 +774,61 @@ function Synthesis(props: {
           </div>
           <div>
             <span>调用方式</span>
-            <strong>
-              {p.selectedModel?.mode === "provider" ? "真实 API" : "本地演示"}
-            </strong>
+            <strong>厂商 API</strong>
           </div>
           <div>
             <span>输出</span>
             <strong>{p.format.toUpperCase()}</strong>
           </div>
         </div>
-        {p.audioUrl && (
-          <div className="player latest-player">
-            <div className="player-icon">
-              <Volume2 size={20} />
-            </div>
-            <div className="player-main">
-              <div className="player-title">
-                <strong>刚刚生成</strong>
-                <span>{p.selectedVoice?.display_name || p.voice} · {p.format.toUpperCase()}</span>
-              </div>
-              <p className="player-text">{p.text}</p>
-              <audio controls src={p.audioUrl} />
-            </div>
-            <a
-              className="download-button"
-              href={p.audioUrl}
-              download={"voice-studio." + p.format}
-              title="下载"
-            >
-              <Download size={17} />
-            </a>
-          </div>
-        )}
-        <div className="generate-row">
-          <button
-            className="primary-button"
-            onClick={p.synthesize}
-            disabled={p.busy || !selectedVoiceValue}
-          >
-            <Sparkles size={17} />
-            {p.busy ? "生成中..." : "生成语音"}
-          </button>
-        </div>
       </div>
-      <aside className="control-column">
-        <div className="control-tabs" role="tablist" aria-label="合成侧栏">
-          <button
-            className={sidePanel === "settings" ? "selected" : ""}
-            role="tab"
-            aria-selected={sidePanel === "settings"}
-            onClick={() => setSidePanel("settings")}
-          >
-            <Settings2 size={16} />
-            设置
-          </button>
-          <button
-            className={sidePanel === "history" ? "selected" : ""}
-            role="tab"
-            aria-selected={sidePanel === "history"}
-            onClick={() => setSidePanel("history")}
-          >
-            <Clock3 size={16} />
-            历史
-          </button>
+      <section className="synthesis-settings" aria-labelledby="synthesis-settings-title">
+        <h3 id="synthesis-settings-title"><Settings2 size={18} />设置</h3>
+        <div className="synthesis-settings-grid">
+          <label>服务来源<select value={selectedProvider} onChange={(event) => chooseProvider(event.target.value)}>
+            {credentialProviderIds.filter((id) => synthesisModels.some((item) => item.provider === id)).map((id) => <option value={id} key={id}>{providerMeta[id].label}</option>)}
+          </select></label>
+          <div className="synthesis-model-field">
+            <label>模型<select value={p.model} onChange={(event) => p.setModel(event.target.value)}>
+              {providerModels.map((item) => <option value={item.gateway_id} key={item.gateway_id}>{item.display_name}</option>)}
+            </select></label>
+            {p.selectedModel && <div className="model-meta"><span className={`provider-mark ${providerMeta[p.selectedModel.provider]?.tone}`}>{providerMeta[p.selectedModel.provider]?.mark}</span><div><strong>{p.selectedModel.quality}质感</strong><small>{p.selectedModel.latency}响应 · 厂商接口</small></div></div>}
+          </div>
+          <div className="synthesis-voice-field">
+            <label>音色<select value={selectedVoiceValue} onChange={(event) => p.setVoice(event.target.value)} disabled={!compatibleVoices.length}>
+              {!compatibleVoices.length && <option value="">请先创建或导入兼容音色</option>}
+              {compatibleVoices.map((item) => <option value={item.public_name} key={item.id}>{item.display_name} · {item.public_name}</option>)}
+            </select></label>
+            <button className="inline-action" type="button" onClick={() => p.setActive("clone")}><Plus size={15} />创建或克隆音色</button>
+          </div>
+          {(p.selectedModel?.model_id === "qwen3-tts-instruct-flash" || p.selectedModel?.model_id === "seed-tts-2.0") && (
+            <label className="synthesis-instruction-field">表达指令<input value={p.instructions} onChange={(event) => p.setInstructions(event.target.value)} placeholder="例如：温暖、克制，结尾轻微上扬" /></label>
+          )}
         </div>
-        {sidePanel === "settings" ? <>
-          <div className="control-section">
-          <label>厂商</label>
-          <select
-            value={selectedProvider}
-            onChange={(e) => chooseProvider(e.target.value)}
-          >
-            {Object.keys(providerMeta)
-              .filter((id) =>
-                synthesisModels.some((item) => item.provider === id),
-              )
-              .map((id) => (
-                <option value={id} key={id}>
-                  {providerMeta[id].label}
-                </option>
-              ))}
-          </select>
-          <label>模型</label>
-          <select value={p.model} onChange={(e) => p.setModel(e.target.value)}>
-            {providerModels.map((item) => (
-              <option value={item.gateway_id} key={item.gateway_id}>
-                {item.display_name}
-              </option>
-            ))}
-          </select>
-          {p.selectedModel && (
-            <div className="model-meta">
-              <span
-                className={
-                  "provider-mark " +
-                  providerMeta[p.selectedModel.provider]?.tone
-                }
-              >
-                {providerMeta[p.selectedModel.provider]?.mark}
-              </span>
-              <div>
-                <strong>{p.selectedModel.quality}质感</strong>
-                <small>
-                  {p.selectedModel.latency}响应 ·{" "}
-                  {p.selectedModel.mode === "provider"
-                    ? "真实厂商接口"
-                    : "演示适配器"}
-                </small>
-              </div>
-            </div>
-          )}
-          {(p.selectedModel?.model_id === "qwen3-tts-instruct-flash" ||
-            p.selectedModel?.model_id === "seed-tts-2.0") && (
-            <>
-              <label>表达指令</label>
-              <input
-                value={p.instructions}
-                onChange={(event) => p.setInstructions(event.target.value)}
-                placeholder="例如：温暖、克制，结尾轻微上扬"
-              />
-            </>
-          )}
-          <label>音色</label>
-          <select
-            value={selectedVoiceValue}
-            onChange={(e) => p.setVoice(e.target.value)}
-            disabled={!compatibleVoices.length}
-          >
-            {!compatibleVoices.length && (
-              <option value="">请先创建或导入兼容音色</option>
-            )}
-            {compatibleVoices.map((item) => (
-              <option value={item.public_name} key={item.id}>
-                {item.display_name} · {item.public_name}
-              </option>
-            ))}
-          </select>
-          <button
-            className="inline-action"
-            onClick={() => p.setActive("clone")}
-          >
-            <Plus size={15} />
-            创建或克隆音色
-          </button>
+        <div className="synthesis-tuning-grid">
+          <div className="synthesis-speed-setting">
+            <div className="range-label"><label>语速</label><output>{p.speed.toFixed(1)}×</output></div>
+            <input type="range" min="0" max="100" step="1" value={speedPosition} aria-valuetext={`${p.speed.toFixed(1)} 倍`} onChange={(event) => changeSpeed(Number(event.target.value))} />
+            <div className="range-scale"><span>慢</span><span>自然</span><span>快</span></div>
           </div>
-          <div className="control-section bordered">
-          <div className="range-label">
-            <label>语速</label>
-            <output>{p.speed.toFixed(1)}×</output>
+          <div className="synthesis-format-setting">
+            <label>输出格式</label>
+            <div className="segmented">{["wav", "mp3"].map((item) => <button className={p.format === item ? "selected" : ""} type="button" onClick={() => p.setFormat(item)} key={item}>{item.toUpperCase()}</button>)}</div>
           </div>
-          <input
-            type="range"
-            min="0.5"
-            max="2"
-            step="0.1"
-            value={p.speed}
-            onChange={(e) => p.setSpeed(Number(e.target.value))}
-          />
-          <div className="range-scale">
-            <span>慢</span>
-            <span>自然</span>
-            <span>快</span>
-          </div>
-          <label>输出格式</label>
-          <div className="segmented">
-            {["wav", "mp3"].map((item) => (
-              <button
-                className={p.format === item ? "selected" : ""}
-                onClick={() => p.setFormat(item)}
-                key={item}
-              >
-                {item.toUpperCase()}
-              </button>
-            ))}
-          </div>
-          </div>
-          <div className="control-note">
-            <Gauge size={16} />
-            <span>
-              {p.selectedModel?.mode === "provider"
-                ? "当前模型会调用已保存的厂商凭据，结果来自真实语音服务。"
-                : "当前模型使用本地演示适配器，不会消耗厂商额度。"}
-            </span>
-          </div>
-        </> : (
-          <div className="control-history">
-            <div className="control-history-head">
-              <div>
-                <h3>最近生成</h3>
-                <span>最近 {Math.min(p.jobs.length, 6)} 条记录</span>
-              </div>
-              <button className="inline-action" onClick={() => p.setActive("history")}>查看全部</button>
-            </div>
-            {p.jobs.length === 0 ? (
-              <div className="control-history-empty"><Clock3 size={20} /><span>生成语音后，记录会出现在这里。</span></div>
-            ) : (
-              <div className="control-history-list">
-                {p.jobs.slice(0, 6).map((job) => (
-                  <div className="control-history-item" key={job.id}>
-                    <HistoryAudioButton src={job.audio_url} label="播放这条语音" compact />
-                    <div>
-                      <strong title={job.input_text || `${job.voice} · ${job.model}`}>{job.input_text || `${job.voice} · ${job.model}`}</strong>
-                      <span>{job.audio_cleaned_at ? "音频已清理" : job.voice} · {new Date(job.created_at).toLocaleString()}</span>
-                    </div>
-                    <a className={job.audio_url ? "control-history-download" : "control-history-download disabled"} href={job.audio_url || undefined} download title="下载声音文件" aria-label="下载声音文件"><Download size={16} /></a>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </aside>
+        </div>
+        <div className="control-note"><Gauge size={16} /><span>当前模型会调用已保存的厂商凭据，结果来自对应厂商的语音服务。</span></div>
+      </section>
+      <div className="generate-row">
+        <button className="primary-button" onClick={p.synthesize} disabled={p.busy || !selectedVoiceValue}><Sparkles size={17} />{p.busy ? "生成中..." : "生成语音"}</button>
+      </div>
+      {p.audioUrl && (
+        <div className="player latest-player">
+          <div className="player-icon"><Volume2 size={20} /></div>
+          <div className="player-main"><div className="player-title"><strong>刚刚生成</strong><span>{p.selectedVoice?.display_name || p.voice} · {p.format.toUpperCase()}</span></div><p className="player-text">{p.text}</p><audio controls src={p.audioUrl} /></div>
+          <a className="download-button" href={p.audioUrl} download={"voice-studio." + p.format} title="下载"><Download size={17} /></a>
+        </div>
+      )}
+      </div>
     </section>
   );
 }
@@ -919,6 +864,7 @@ function VoiceLibrary({
   onImport,
   onBatchImport,
   onRemove,
+  onRename,
   onUse,
 }: {
   voices: Voice[];
@@ -927,29 +873,34 @@ function VoiceLibrary({
   onImport: (config: ImportVoiceConfig) => Promise<void>;
   onBatchImport: (configs: ImportVoiceConfig[]) => Promise<void>;
   onRemove: (voice: Voice) => Promise<void>;
+  onRename: (voice: Voice, displayName: string) => Promise<void>;
   onUse: (voice: Voice) => void;
 }) {
   const [provider, setProvider] = useState("all");
   const [scope, setScope] = useState<"all" | "mine">("all");
   const [showImport, setShowImport] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Voice | null>(null);
   const scoped = scope === "mine"
-    ? voices.filter((item) => item.voice_type !== "preset")
+    ? voices.filter((item) => ["cloned", "design"].includes(item.voice_type))
     : voices;
   const filtered = provider === "all"
     ? scoped
     : scoped.filter((item) => item.provider === provider);
   const counts = Object.fromEntries(
-    Object.keys(providerMeta).map((id) => [
+    credentialProviderIds.map((id) => [
       id,
-      voices.filter((item) => item.provider === id).length,
+      scoped.filter((item) => item.provider === id).length,
     ]),
   );
   return (
     <section className="page-section voice-library">
       <div className="page-toolbar">
         <div>
-          <h2>找到适合这段文字的声音</h2>
-          <p className="page-description">浏览预置、克隆、导入和设计音色，并按厂商快速筛选。</p>
+          <WorkspaceHero
+            title="让每一个声音"
+            accent="都有自己的位置。"
+            description="浏览预置、克隆、导入和设计音色，并按来源快速筛选。"
+          />
         </div>
         <div className="toolbar-actions">
           <button
@@ -969,29 +920,26 @@ function VoiceLibrary({
         <button className={scope === "all" ? "selected" : ""} onClick={() => setScope("all")}>全部音色</button>
         <button className={scope === "mine" ? "selected" : ""} onClick={() => setScope("mine")}>我的音色</button>
       </div>
-      <div className="voice-filters">
-        <button
-          className={provider === "all" ? "selected" : ""}
-          onClick={() => setProvider("all")}
-        >
-          全部 <span>{voices.length}</span>
-        </button>
-        {Object.entries(providerMeta).map(([id, meta]) => (
-          <button
-            className={provider === id ? "selected" : ""}
-            onClick={() => setProvider(id)}
-            key={id}
-          >
-            <span className={"provider-dot " + meta.tone} />
-            {meta.label}
-            <span>{counts[id] || 0}</span>
-          </button>
-        ))}
-      </div>
+      <ProviderSelector
+        className="voice-provider-selector"
+        label="按厂商筛选音色"
+        value={provider}
+        onChange={setProvider}
+        options={[
+          { id: "all", label: "全部厂商", mark: "全", tone: "gray", detail: `${scoped.length} 个音色` },
+          ...credentialProviderIds.map((id) => ({
+            id,
+            label: providerMeta[id].label,
+            mark: providerMeta[id].mark,
+            tone: providerMeta[id].tone,
+            detail: `${counts[id] || 0} 个音色`,
+          })),
+        ]}
+      />
       <div className="voice-table">
         <div className="table-head">
           <span>音色</span>
-          <span>厂商 / 模型</span>
+          <span>来源 / 模型</span>
           <span>类型</span>
           <span>语言</span>
           <span>状态</span>
@@ -1010,7 +958,6 @@ function VoiceLibrary({
                 </div>
                 <div>
                   <strong>{item.display_name}</strong>
-                  <small>{item.public_name}</small>
                 </div>
               </div>
               <div>
@@ -1035,6 +982,14 @@ function VoiceLibrary({
               </span>
               <div className="voice-actions">
                 <button className="voice-use-button" onClick={() => onUse(item)}>使用</button>
+                {item.voice_type !== "preset" && <button
+                  className="icon-button rename-voice"
+                  title="重命名"
+                  aria-label={`重命名 ${item.display_name}`}
+                  onClick={() => setRenameTarget(item)}
+                >
+                  <Pencil size={16} />
+                </button>}
                 <button
                   className="icon-button delete-voice"
                   title="从音色库移除"
@@ -1049,7 +1004,7 @@ function VoiceLibrary({
         ) : (
           <div className="empty-state">
             <Library size={21} />
-            <span>这个厂商还没有可用音色</span>
+            <span>当前来源还没有可用音色</span>
           </div>
         )}
       </div>
@@ -1069,7 +1024,65 @@ function VoiceLibrary({
           }}
         />
       )}
+      {renameTarget && (
+        <RenameVoiceDialog
+          voice={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onRename={async (displayName) => {
+            await onRename(renameTarget, displayName);
+            setRenameTarget(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function RenameVoiceDialog({
+  voice,
+  onClose,
+  onRename,
+}: {
+  voice: Voice;
+  onClose: () => void;
+  onRename: (displayName: string) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(voice.display_name);
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState("");
+  const submit = async () => {
+    const value = displayName.trim();
+    if (!value || value === voice.display_name) return;
+    setWorking(true);
+    setMessage("");
+    try {
+      await onRename(value);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "重命名失败");
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !working) onClose(); }}>
+      <div className="voice-modal rename-voice-modal" role="dialog" aria-modal="true" aria-labelledby="rename-voice-title">
+        <div className="modal-head">
+          <div><h3 id="rename-voice-title">重命名音色</h3></div>
+          <button className="icon-button" type="button" onClick={onClose} disabled={working} title="关闭" aria-label="关闭"><X size={18} /></button>
+        </div>
+        <div className="modal-form">
+          <label htmlFor="rename-voice-name">显示名称</label>
+          <input id="rename-voice-name" autoFocus maxLength={100} value={displayName} onChange={(event) => setDisplayName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submit(); }} />
+          <div className="rename-api-id"><span>兼容别名</span><code>{voice.public_name}</code></div>
+          <p className="modal-note"><ShieldCheck size={15} />重命名只改变界面中显示的名称，现有 API 调用、任务记录和厂商 Voice ID 不受影响。</p>
+          {message && <div className="form-message">{message}</div>}
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={working}>取消</button>
+          <button className="primary-button compact" type="button" onClick={() => void submit()} disabled={working || !displayName.trim() || displayName.trim() === voice.display_name}><Save size={16} />{working ? "正在保存..." : "保存名称"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1267,7 +1280,7 @@ function ImportVoiceDialog({
                 value={provider}
                 onChange={(event) => chooseProvider(event.target.value)}
               >
-                {(mode === "sync" ? syncProviders : Object.keys(providerMeta))
+                {(mode === "sync" ? syncProviders : credentialProviderIds)
                   .filter((id) =>
                     importModels.some((item) => item.provider === id),
                   )
@@ -1484,6 +1497,9 @@ function VoiceDesignPanel({
   const selected = designModels.find((item) => item.provider === provider && item.model_id === modelId);
   const promptLimit = 2000;
   const previewLimit = 2000;
+  const designProviderIds = credentialProviderIds.filter((id) =>
+    designModels.some((item) => item.provider === id),
+  );
 
   useEffect(() => {
     if (selected) return;
@@ -1528,41 +1544,72 @@ function VoiceDesignPanel({
       </div>
       <div className="design-layout">
         <div className="design-form">
-          <div className="design-step"><div><b>选择设计引擎</b></div></div>
-          <div className="provider-switch">
-            {Object.entries(providerMeta).filter(([id]) => designModels.some((item) => item.provider === id)).map(([id, meta]) => (
-              <button className={provider === id ? "selected" : ""} onClick={() => chooseProvider(id)} key={id}><span className={"provider-dot " + meta.tone} />{meta.label}</button>
-            ))}
+          <h3 className="design-section-title">选择设计引擎</h3>
+          <ProviderSelector
+            className="design-provider-selector"
+            label="声音设计厂商"
+            value={provider}
+            onChange={chooseProvider}
+            options={designProviderIds.map((id) => ({
+              id,
+              label: providerMeta[id].label,
+              mark: providerMeta[id].mark,
+              tone: providerMeta[id].tone,
+              detail: `${designModels.filter((item) => item.provider === id).length} 个设计模型`,
+            }))}
+          />
+          <div className="design-model-field">
+            <label htmlFor="design-model">设计模型</label>
+            <select
+              id="design-model"
+              translate="no"
+              value={modelId}
+              onChange={(event) => setModelId(event.target.value)}
+            >
+              {providerModels.map((item) => <option value={item.model_id} key={item.gateway_id}>{item.display_name}</option>)}
+            </select>
           </div>
-          <label>设计模型</label>
-          <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
-            {providerModels.map((item) => <option value={item.model_id} key={item.gateway_id}>{item.display_name}</option>)}
-          </select>
-          <div className="design-step design-step-spaced"><div><b>描述你想要的声音</b></div></div>
-          <textarea className="design-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={promptLimit} />
-          <div className="design-count">{prompt.length} / {promptLimit.toLocaleString()}</div>
-          <label>试听文本</label>
-          <textarea className="design-preview-text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} maxLength={previewLimit} />
+          <h3 className="design-section-title design-section-spaced">描述你想要的声音</h3>
+          <div className="design-copy-grid">
+            <div className="design-copy-field">
+              <label htmlFor="design-prompt">声音描述</label>
+              <div className="design-textarea-wrap">
+                <textarea id="design-prompt" className="design-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={promptLimit} />
+                <div className="design-count">{prompt.length} / {promptLimit.toLocaleString()}</div>
+              </div>
+            </div>
+            <div className="design-copy-field">
+              <label htmlFor="design-preview-text">试听文本</label>
+              <textarea id="design-preview-text" className="design-preview-text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} maxLength={previewLimit} />
+            </div>
+          </div>
           <div className="form-grid design-names"><div><label>显示名称</label><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></div><div><label>兼容别名</label><input value={publicName} onChange={(event) => setPublicName(event.target.value)} /></div></div>
-          <button className="primary-button design-submit" onClick={() => void submit()} disabled={working || !selected || !prompt.trim() || !previewText.trim()}><WandSparkles size={17} />{working ? "正在设计..." : "创建并试听音色"}</button>
+          <button className="primary-button design-submit" onClick={() => void submit()} disabled={working || !selected || !prompt.trim() || !previewText.trim() || !displayName.trim() || !publicName.trim()}><WandSparkles size={17} />{working ? "正在设计..." : "创建并试听音色"}</button>
+          {previewVoice && (
+            <div className="design-preview-result" aria-live="polite">
+              <div className="design-preview-icon"><Volume2 size={20} /></div>
+              <div className="design-preview-main">
+                <span>试听结果</span>
+                <strong>{previewVoice.display_name}</strong>
+                <small>{previewVoice.provider === "mimo" ? "请求级设计模板" : "已保存到音色库"} · {previewVoice.public_name}</small>
+                {previewVoice.preview_url && <audio controls src={previewVoice.preview_url} />}
+              </div>
+            </div>
+          )}
         </div>
-        <aside className="design-inspector">
-          <h3 className="inspector-title">试听结果</h3>
-          {previewVoice ? <div className="design-result"><div className="result-mark"><Check size={19} /></div><strong>{previewVoice.display_name}</strong><small>{previewVoice.provider === "mimo" ? "请求级设计模板" : "已保存到音色库"}</small>{previewVoice.preview_url && <audio controls src={previewVoice.preview_url} />}</div> : <div className="design-empty"><WandSparkles size={28} /><strong>还没有试听结果</strong><span>提交描述后，这里会出现试听播放器与资产状态。</span></div>}
-        </aside>
       </div>
     </section>
   );
 }
 
 function ClonePanel({
-  fileRef,
   models,
   onClone,
+  onNotice,
 }: {
-  fileRef: React.RefObject<HTMLInputElement | null>;
   models: Model[];
-  onClone: (config: CloneConfig) => Promise<void>;
+  onClone: (config: CloneConfig, file: File) => Promise<void>;
+  onNotice: (message: string) => void;
 }) {
   const cloneModels = useMemo(
     () =>
@@ -1577,8 +1624,9 @@ function ClonePanel({
   const [publicName, setPublicName] = useState(
     "clone-" + Date.now().toString().slice(-6),
   );
-  const [consented, setConsented] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
   const [working, setWorking] = useState(false);
   const providerModels = cloneModels.filter(
     (item) => item.provider === provider,
@@ -1604,13 +1652,34 @@ function ClonePanel({
     const first = cloneModels.find((item) => item.provider === nextProvider);
     if (first) setModelId(first.model_id);
   };
+  const acceptedExtensions = isVolcengineClone
+    ? [".wav", ".mp3", ".ogg", ".m4a", ".aac", ".pcm"]
+    : [".wav", ".mp3", ".m4a"];
+  const acceptAudioFile = (file: File | undefined) => {
+    if (!file) return;
+    const extension = file.name.includes(".")
+      ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
+      : "";
+    if (!file.type.startsWith("audio/") && !acceptedExtensions.includes(extension)) {
+      onNotice("请选择 WAV、MP3、M4A 等支持的音频文件");
+      return;
+    }
+    setSelectedFile(file);
+    setFileName(file.name);
+    onNotice("");
+  };
+  const handleDrop = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragging(false);
+    acceptAudioFile(event.dataTransfer.files?.[0]);
+  };
   const submit = async () => {
     if (
       !selected ||
       !displayName.trim() ||
       !publicName.trim() ||
-      !consented ||
-      !fileName
+      !selectedFile
     )
       return;
     setWorking(true);
@@ -1620,7 +1689,7 @@ function ClonePanel({
         model_id: modelId,
         display_name: displayName.trim(),
         public_name: publicName.trim(),
-      });
+      }, selectedFile);
     } finally {
       setWorking(false);
     }
@@ -1628,26 +1697,32 @@ function ClonePanel({
 
   return (
     <section className="page-section clone-page">
-      <div className="clone-intro">
-        <h2>
-          让一个真实的声音
-          <br />
-          <em>留下它的纹理。</em>
-        </h2>
-        <p>
-          上传一段已获授权的参考音频，再选择厂商和明确支持声音复刻的目标模型。
-        </p>
-        <label className="consent-line">
-          <input
-            type="checkbox"
-            checked={consented}
-            onChange={(event) => setConsented(event.target.checked)}
-          />
-          我确认已获得录音中说话人的明确授权
-        </label>
-      </div>
+      <WorkspaceHero
+        title="让一个真实的声音"
+        accent="留下它的纹理。"
+        description="上传参考音频，选择目标厂商和模型，创建一个可以在语音合成中复用的声音。"
+      />
       <div className="clone-form">
-        <label className="upload-zone">
+        <label
+          className={`upload-zone${isDragging ? " is-dragging" : ""}`}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setIsDragging(true);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = "copy";
+            setIsDragging(true);
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setIsDragging(false);
+          }}
+          onDrop={handleDrop}
+        >
           <input
             type="file"
             accept={
@@ -1655,10 +1730,7 @@ function ClonePanel({
                 ? ".wav,.mp3,.ogg,.m4a,.aac,.pcm,audio/*"
                 : ".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4"
             }
-            ref={fileRef}
-            onChange={(event) =>
-              setFileName(event.target.files?.[0]?.name || "")
-            }
+            onChange={(event) => acceptAudioFile(event.target.files?.[0])}
           />
           <FileAudio size={25} />
           <strong>{fileName || "拖入参考音频，或点击选择"}</strong>
@@ -1683,7 +1755,7 @@ function ClonePanel({
               value={provider}
               onChange={(event) => chooseProvider(event.target.value)}
             >
-              {Object.keys(providerMeta)
+              {credentialProviderIds
                 .filter((id) =>
                   cloneModels.some((item) => item.provider === id),
                 )
@@ -1730,8 +1802,7 @@ function ClonePanel({
           disabled={
             working ||
             !selected ||
-            !consented ||
-            !fileName ||
+            !selectedFile ||
             !displayName.trim() ||
             !publicName.trim()
           }
@@ -1747,9 +1818,7 @@ function ClonePanel({
               ? "创建时上传样本并取得远端音色 ID；首次正式合成可能触发厂商音色槽位计费。"
               : isMiniMaxClone
                 ? "创建时上传样本并取得远端 Voice ID；7 天内未正式使用的音色可能被厂商删除。"
-              : selected?.mode === "provider"
-                ? "该模型会在每次生成语音时向厂商发送本地参考音频。"
-                : "该模型当前使用本地演示适配器，不会向厂商上传参考音频。"}
+              : "该模型会在每次生成语音时向厂商发送本地参考音频。"}
         </p>
       </div>
     </section>
@@ -1799,7 +1868,7 @@ function GatewayPanel({
   const [statsProvider, setStatsProvider] = useState("");
   const [statsLoading, setStatsLoading] = useState(false);
   const [gatewayView, setGatewayView] = useState<"docs" | "test" | "stats">("docs");
-  const [openEndpoint, setOpenEndpoint] = useState("models");
+  const [openEndpoint, setOpenEndpoint] = useState("");
   useEffect(() => setCurrent(gateway), [gateway]);
   const activeGateway = current || gateway;
   const base = activeGateway?.base_url || "http://127.0.0.1:8765/v1";
@@ -2086,71 +2155,70 @@ function GatewayPanel({
   return (
     <section className="page-section gateway-page">
       <div className="gateway-header">
-        <div>
-          <h2>把 Voice Studio 接入你的应用</h2>
-          <p>
-            使用 OpenAI 兼容接口调用四家语音模型。外部应用只需要 Base URL
-            和网关 Key，厂商凭据始终留在本机后端。
-          </p>
-        </div>
+        <WorkspaceHero
+          title="把 Voice Studio"
+          accent="接入你的应用。"
+          description="使用 OpenAI 兼容接口调用四家语音模型。外部应用只需要 Base URL 和网关 Key，厂商凭据始终留在本机后端。"
+        />
       </div>
 
-      <section className="gateway-credential-layout" aria-label="网关凭据">
-        <div className="gateway-credential-intro">
-          <h3>网关访问凭据</h3>
-          <p>这枚密钥用于本机应用访问统一语音网关，不会替代已保存的厂商 API Key。</p>
-          <div className="gateway-credential-facts">
-            <div><span>监听范围</span><strong>仅本机</strong></div>
-            <div><span>管理方式</span><strong>{activeGateway?.managed ? "应用托管" : "环境变量"}</strong></div>
+      <section className="gateway-overview-grid" aria-label="网关凭据与快速开始">
+        <div className="gateway-overview-primary">
+          <div className="gateway-current-key">
+            <div className="gateway-key-heading">
+              <h3>当前网关 Key</h3>
+              <span className="gateway-key-state"><span className="live-dot" />有效</span>
+            </div>
+            <div className="gateway-key-value">
+              <code>{visibleKey ? key : (activeGateway?.key_hint || "未读取")}</code>
+              <button className="icon-button" onClick={() => setVisibleKey((value) => !value)} title={visibleKey ? "隐藏网关 Key" : "显示网关 Key"} aria-label={visibleKey ? "隐藏网关 Key" : "显示网关 Key"}>
+                {visibleKey ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+              <button className="icon-button" onClick={() => copy("网关 Key", key)} title="复制网关 Key" aria-label="复制网关 Key"><Copy size={16} /></button>
+            </div>
+            <div className="gateway-key-footer">
+              <span>来源：{activeGateway?.key_source || "本地配置"}</span>
+              <button className="secondary-button" disabled={!activeGateway?.managed || rotating} onClick={rotate}>
+                <RotateCcw size={14} className={rotating ? "spinning" : ""} />
+                {rotating ? "正在轮换" : "轮换网关 Key"}
+              </button>
+            </div>
+            {copied && <div className="copy-feedback"><Check size={14} />{copied}</div>}
+          </div>
+          <div className="gateway-quickstart-card">
+            <div className="gateway-quickstart-title">
+              <span><Code2 size={18} />快速开始</span>
+              <button className="quickstart-copy" onClick={() => copy("连接信息", `${base}\nBearer ${key}`)} title="复制连接信息"><Copy size={15} />复制</button>
+            </div>
+            <div className="gateway-quickstart-grid">
+              <div><span>Base URL</span><code>{base}</code></div>
+              <div><span>鉴权方式</span><code>Bearer $VOICE_STUDIO_API_KEY</code></div>
+            </div>
+            <p>把 Base URL 填入支持 OpenAI 的客户端，并将当前网关 Key 作为 API Key。</p>
           </div>
         </div>
-        <div className="gateway-current-key">
-          <div className="gateway-key-heading">
-            <h3>当前网关 Key</h3>
-            <span className="gateway-key-state"><span className="live-dot" />有效</span>
+        <div className="gateway-overview-secondary">
+          <div className="gateway-credential-intro">
+            <h3>网关访问凭据</h3>
+            <p>这枚密钥用于本机应用访问统一语音网关，不会替代已保存的厂商 API Key。</p>
+            <div className="gateway-credential-facts">
+              <div><span>监听范围</span><strong>仅本机</strong></div>
+              <div><span>管理方式</span><strong>{activeGateway?.managed ? "应用托管" : "环境变量"}</strong></div>
+            </div>
           </div>
-          <div className="gateway-key-value">
-            <code>{visibleKey ? key : (activeGateway?.key_hint || "未读取")}</code>
-            <button className="icon-button" onClick={() => setVisibleKey((value) => !value)} title={visibleKey ? "隐藏网关 Key" : "显示网关 Key"} aria-label={visibleKey ? "隐藏网关 Key" : "显示网关 Key"}>
-              {visibleKey ? <EyeOff size={17} /> : <Eye size={17} />}
-            </button>
-            <button className="icon-button" onClick={() => copy("网关 Key", key)} title="复制网关 Key" aria-label="复制网关 Key"><Copy size={16} /></button>
-          </div>
-          <div className="gateway-key-footer">
-            <span>来源：{activeGateway?.key_source || "本地配置"}</span>
-            <button className="secondary-button" disabled={!activeGateway?.managed || rotating} onClick={rotate}>
-              <RotateCcw size={14} className={rotating ? "spinning" : ""} />
-              {rotating ? "正在轮换" : "轮换网关 Key"}
-            </button>
-          </div>
-          {copied && <div className="copy-feedback"><Check size={14} />{copied}</div>}
+          <aside className="gateway-quickstart-aside">
+            <div className="gateway-security-message">
+              <ShieldCheck size={21} />
+              <p>网关 Key 只应保存在受信任的本机应用中，不要放入公开网页、日志或源码仓库。</p>
+            </div>
+            <div className="gateway-error-format">
+              <Code2 size={19} />
+              <strong>错误格式</strong>
+              <p>失败响应包含稳定错误码与可读消息。</p>
+              <code>{'{"detail":{"code":"INVALID_API_KEY","message":"..."}}'}</code>
+            </div>
+          </aside>
         </div>
-      </section>
-
-      <section className="gateway-quickstart" aria-label="快速开始">
-        <div className="gateway-quickstart-card">
-          <div className="gateway-quickstart-title">
-            <span><Code2 size={18} />快速开始</span>
-            <button className="quickstart-copy" onClick={() => copy("连接信息", `${base}\nBearer ${key}`)} title="复制连接信息"><Copy size={15} />复制</button>
-          </div>
-          <div className="gateway-quickstart-grid">
-            <div><span>Base URL</span><code>{base}</code></div>
-            <div><span>鉴权方式</span><code>Bearer $VOICE_STUDIO_API_KEY</code></div>
-          </div>
-          <p>把 Base URL 填入支持 OpenAI 的客户端，并将当前网关 Key 作为 API Key。</p>
-        </div>
-        <aside className="gateway-quickstart-aside">
-          <div className="gateway-security-message">
-            <ShieldCheck size={21} />
-            <p>网关 Key 只应保存在受信任的本机应用中，不要放入公开网页、日志或源码仓库。</p>
-          </div>
-          <div className="gateway-error-format">
-            <Code2 size={19} />
-            <strong>错误格式</strong>
-            <p>失败响应包含稳定错误码与可读消息。</p>
-            <code>{'{"detail":{"code":"INVALID_API_KEY","message":"..."}}'}</code>
-          </div>
-        </aside>
       </section>
 
       <div className="gateway-view-tabs" role="tablist" aria-label="网关页面">
@@ -2206,9 +2274,9 @@ function GatewayPanel({
                 <button className={statsWindow === id ? "selected" : ""} onClick={() => setStatsWindow(id)} key={id}>{label}</button>
               ))}
             </div>
-            <select value={statsProvider} onChange={(event) => setStatsProvider(event.target.value)} aria-label="筛选统计厂商">
-              <option value="">全部厂商</option>
-              {Object.entries(providerMeta).map(([id, meta]) => <option value={id} key={id}>{meta.label}</option>)}
+            <select value={statsProvider} onChange={(event) => setStatsProvider(event.target.value)} aria-label="筛选统计来源">
+              <option value="">全部来源</option>
+              {credentialProviderIds.map((id) => <option value={id} key={id}>{providerMeta[id].label}</option>)}
             </select>
             <button className="icon-button" onClick={() => refreshStats()} title="刷新统计" disabled={statsLoading}>
               <RefreshCw size={15} className={statsLoading ? "spinning" : ""} />
@@ -2231,7 +2299,7 @@ function GatewayPanel({
                 <div className="stats-table-head"><span>维度</span><span>请求</span><span>成功率</span><span>首片 P95</span><span>总耗时 P95</span></div>
                 {stats.by_provider.map((item) => (
                   <div className="stats-table-row provider-row" key={`provider-${item.name}`}>
-                    <span><b>{statsProviderLabel(item.name)}</b><small>厂商</small></span><code>{item.requests}</code><code>{item.success_rate}%</code><code>{formatLatency(item.first_chunk_latency.p95)}</code><code>{formatLatency(item.total_latency.p95)}</code>
+                    <span><b>{statsProviderLabel(item.name)}</b><small>来源</small></span><code>{item.requests}</code><code>{item.success_rate}%</code><code>{formatLatency(item.first_chunk_latency.p95)}</code><code>{formatLatency(item.total_latency.p95)}</code>
                   </div>
                 ))}
                 {stats.by_model.slice(0, 8).map((item) => (
@@ -2270,7 +2338,7 @@ function GatewayPanel({
           <div className="test-request">
             <div className="test-field-row">
               <label>模型<select value={testModel} onChange={(event) => setTestModel(event.target.value)}>
-                {Object.keys(providerMeta).map((provider) => {
+                {credentialProviderIds.map((provider) => {
                   const items = synthesisModels.filter((item) => item.provider === provider);
                   if (!items.length) return null;
                   return <optgroup label={providerMeta[provider].label} key={provider}>{items.map((item) => <option value={item.gateway_id} key={item.gateway_id}>{item.display_name}</option>)}</optgroup>;
@@ -2289,7 +2357,7 @@ function GatewayPanel({
                 ? <button className="secondary-button compact" onClick={cancelStream}><X size={15} />取消流式</button>
                 : <button className="secondary-button compact" onClick={testStream} disabled={speechTest.status === "running" || !key || !testModel || !compatibleVoices.length}><Radio size={15} />测试流式{selectedTestModel?.provider === "mimo" ? " · PCM" : ""}</button>}
             </div>
-            {selectedTestModel && <div className="test-model-note"><span className={"provider-mark " + providerMeta[selectedTestModel.provider]?.tone}>{providerMeta[selectedTestModel.provider]?.mark}</span><span><strong>{selectedTestModel.display_name}</strong><small>{selectedTestModel.mode === "provider" ? "真实厂商接口" : "本地演示适配器"} · {compatibleVoices.length} 个兼容音色</small></span></div>}
+            {selectedTestModel && <div className="test-model-note"><span className={"provider-mark " + providerMeta[selectedTestModel.provider]?.tone}>{providerMeta[selectedTestModel.provider]?.mark}</span><span><strong>{selectedTestModel.display_name}</strong><small>厂商接口 · {compatibleVoices.length} 个兼容音色</small></span></div>}
           </div>
           <div className="test-result">
             <div className="result-head"><span>响应结果</span><span className={"test-status " + displayedTest.status}><span className="status-dot" />{statusLabel(displayedTest)}</span></div>
@@ -2484,12 +2552,16 @@ function historyGroupLabel(key: string) {
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(dateFromKey(key));
 }
 
-function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<void> }) {
+function History({ jobs, voices, onRefresh }: { jobs: Job[]; voices: Voice[]; onRefresh: () => Promise<void> }) {
   const [dateFilter, setDateFilter] = useState<HistoryFilter>({ kind: "all" });
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
+  const voiceNames = useMemo(
+    () => new Map(voices.map((voice) => [voice.public_name, voice.display_name])),
+    [voices],
+  );
   const filtered = useMemo(() => jobs.filter((job) => matchesHistoryFilter(job, dateFilter)), [jobs, dateFilter]);
   const groups = useMemo(() => {
     const grouped = new Map<string, Job[]>();
@@ -2608,6 +2680,11 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
 
   return (
     <section className="page-section history-page">
+      <WorkspaceHero
+        title="每一次生成"
+        accent="都留下可追溯的声音。"
+        description="按日期浏览生成任务，试听、下载文字记录与音频，或批量整理历史文件。"
+      />
       <div className="history-command-bar">
         <HistoryDateMenu filter={dateFilter} onChange={changeFilter} />
         <div className="history-command-actions">
@@ -2632,32 +2709,30 @@ function History({ jobs, onRefresh }: { jobs: Job[]; onRefresh: () => Promise<vo
       )}
       {message && <div className="history-message"><Activity size={14} />{message}</div>}
       {groups.length === 0 ? (
-        <div className="empty-state history-empty"><Clock3 size={22} /><span>{dateFilter.kind === "all" ? "还没有任务，去合成工作台生成第一条语音。" : "这个日期范围内没有任务记录。"}</span></div>
+        <div className="empty-state history-empty"><Clock3 size={22} /><span>{dateFilter.kind === "all" ? "还没有任务，去语音合成生成第一条语音。" : "这个日期范围内没有任务记录。"}</span></div>
       ) : (
         <div className="history-groups">
           {groups.map(([date, dateJobs]) => (
             <section className="history-date-group" key={date}>
               <h2>{historyGroupLabel(date)}</h2>
               <div className="history-list">
-                {dateJobs.map((job) => (
-                  <article className={batchMode ? `history-row batch-selecting${selectedIds.has(job.id) ? " selected" : ""}` : "history-row"} key={job.id}>
+                {dateJobs.map((job) => {
+                  const voiceName = voiceNames.get(job.voice) || job.voice;
+                  return <article className={batchMode ? `history-row batch-selecting${selectedIds.has(job.id) ? " selected" : ""}` : "history-row"} key={job.id}>
                     {batchMode && <label className="history-checkbox"><input type="checkbox" checked={selectedIds.has(job.id)} onChange={() => toggleJob(job.id)} aria-label={`选择任务 ${job.id}`} /></label>}
                     <HistoryAudioButton src={job.audio_url} label="播放这条语音" />
                     <div className="history-main">
-                      <strong title={job.input_text || `${job.voice} · ${job.model}`}>{job.input_text || `${job.voice} · ${job.model}`}</strong>
-                      <span>{job.voice} · {job.model}</span>
-                      <span>{job.input_chars} 字符 · {job.duration_ms / 1000}s · {new Date(job.created_at).toLocaleString()}</span>
-                      <span className="status"><span className="live-dot" />{job.status === "completed" ? "已完成" : job.status}</span>
-                      {job.audio_cleaned_at && <span className="history-audio-cleaned"><FileAudio size={14} />音频已按存储策略清理，文字记录仍然保留</span>}
-                      {job.input_text ? <details className="history-record"><summary>查看文字记录</summary><p>{job.input_text}</p></details> : <span className="history-missing">旧记录未保存原始文字</span>}
+                      <strong title={job.input_text || `${voiceName} · ${job.model}`}>{job.input_text || `${voiceName} · ${job.model}`}</strong>
+                      <span>{voiceName} · {job.model}</span>
+                      {job.input_text && <details className="history-record"><summary>查看文字记录</summary><p>{job.input_text}</p></details>}
                     </div>
                     {!batchMode && <div className="history-actions">
                       <a className={job.text_url ? "history-action" : "history-action disabled"} href={job.text_url || undefined} title={job.text_url ? "下载文字记录" : "没有可下载的文字记录"} aria-label="下载文字记录"><FileText size={16} /></a>
                       <a className={job.audio_url ? "history-action" : "history-action disabled"} href={job.audio_url || undefined} title={job.audio_url ? "下载声音文件" : "声音文件不可用"} aria-label="下载声音文件"><Download size={16} /></a>
                       <button className="history-action danger-action" onClick={() => void deleteOne(job)} title="删除任务" aria-label="删除任务"><Trash2 size={16} /></button>
                     </div>}
-                  </article>
-                ))}
+                  </article>;
+                })}
               </div>
             </section>
           ))}
@@ -2671,6 +2746,11 @@ function Settings({ models, onJobsChanged }: { models: Model[]; onJobsChanged: (
   const [section, setSection] = useState<"providers" | "storage" | "environment">("providers");
   return (
     <section className="page-section settings-shell">
+      <WorkspaceHero
+        title="把每个厂商"
+        accent="放进同一个工作台。"
+        description="统一管理厂商凭据、生成文件存储策略和本机运行环境。"
+      />
       <div className="settings-navigation" role="tablist" aria-label="设置分类">
         <button className={section === "providers" ? "selected" : ""} type="button" role="tab" aria-selected={section === "providers"} onClick={() => setSection("providers")}><KeyRound size={18} />厂商账号</button>
         <button className={section === "storage" ? "selected" : ""} type="button" role="tab" aria-selected={section === "storage"} onClick={() => setSection("storage")}><HardDrive size={18} />存储与清理</button>
@@ -2678,17 +2758,15 @@ function Settings({ models, onJobsChanged }: { models: Model[]; onJobsChanged: (
       </div>
       {section === "providers" && <ProviderSettings models={models} />}
       {section === "storage" && <StorageSettings onJobsChanged={onJobsChanged} />}
-      {section === "environment" && <EnvironmentSettings onJobsChanged={onJobsChanged} />}
+      {section === "environment" && <EnvironmentSettings />}
     </section>
   );
 }
 
-function EnvironmentSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void> }) {
+function EnvironmentSettings() {
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [demoBusy, setDemoBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [demoAudioUrl, setDemoAudioUrl] = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -2702,36 +2780,6 @@ function EnvironmentSettings({ onJobsChanged }: { onJobsChanged: () => Promise<v
     }
   };
   useEffect(() => { void load(); }, []);
-  useEffect(() => () => { if (demoAudioUrl) URL.revokeObjectURL(demoAudioUrl); }, [demoAudioUrl]);
-
-  const runDemo = async () => {
-    if (!diagnostics?.demo.available) return;
-    setDemoBusy(true);
-    setMessage("正在生成本地演示音频...");
-    try {
-      const gatewayConfig = await api<Gateway>("/api/gateway");
-      const response = await fetch("/v1/audio/speech", {
-        method: "POST",
-        headers: { Authorization: "Bearer " + gatewayConfig.key, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: diagnostics.demo.model,
-          voice: diagnostics.demo.voice,
-          input: "Voice Studio 本地演示音频生成成功。",
-          response_format: "wav",
-        }),
-      });
-      if (!response.ok) throw new Error(await responseError(response));
-      const blob = await response.blob();
-      if (demoAudioUrl) URL.revokeObjectURL(demoAudioUrl);
-      setDemoAudioUrl(URL.createObjectURL(blob));
-      setMessage("本地演示通过，未调用厂商接口，也未消耗额度。");
-      await onJobsChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "本地演示失败");
-    } finally {
-      setDemoBusy(false);
-    }
-  };
 
   if (loading && !diagnostics) {
     return <div className="environment-loading"><RefreshCw size={18} className="spinning" />正在检查运行环境...</div>;
@@ -2768,13 +2816,6 @@ function EnvironmentSettings({ onJobsChanged }: { onJobsChanged: () => Promise<v
             </div>
           ))}
         </div>
-        <div className="environment-demo">
-          <div><strong>本地演示</strong><span>无需 API Key，生成一段 WAV 来验证完整保存与播放流程。</span></div>
-          <button className="primary-button compact" type="button" onClick={() => void runDemo()} disabled={demoBusy || diagnostics.required_failures > 0}>
-            <FlaskConical size={16} />{demoBusy ? "正在生成" : "运行演示"}
-          </button>
-        </div>
-        {demoAudioUrl && <audio className="environment-demo-audio" controls src={demoAudioUrl} />}
       </>}
       {message && <div className="environment-message"><Activity size={15} />{message}</div>}
     </div>
@@ -2916,7 +2957,7 @@ function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void>
   return (
     <div className="storage-settings-page">
       <header className="storage-heading">
-        <div><h2>生成文件存储</h2><p>控制任务音频的保留时间和磁盘占用。音色库、API 凭据与声音克隆素材不会被自动清理。</p></div>
+        <div><h2>生成文件存储</h2><p>控制任务音频的保留时间和磁盘占用。音色库、API 凭据与语音克隆素材不会被自动清理。</p></div>
         <button className="secondary-button" type="button" onClick={() => void openDirectory()} disabled={Boolean(working)}><FolderOpen size={17} />打开目录</button>
       </header>
 
@@ -3122,44 +3163,24 @@ function ProviderSettings({ models }: { models: Model[] }) {
       </div>
       <div className="credential-layout">
         <div className="provider-rail">
-          {credentialProviderIds.map((id) => {
-            const meta = providerMeta[id];
-            const count = accounts.filter(
-              (item) => item.provider === id,
-            ).length;
-            const active = accounts.some(
-              (item) => item.provider === id && item.status === "active",
-            );
-            return (
-              <button
-                className={
-                  provider === id ? "provider-tab selected" : "provider-tab"
-                }
-                onClick={() => setProvider(id)}
-                key={id}
-              >
-                <span className={"provider-mark " + meta.tone}>
-                  {meta.mark}
-                </span>
-                <span className="provider-copy">
-                  <strong>{meta.label}</strong>
-                  <small>
-                    {models.filter((item) => item.provider === id).length}{" "}
-                    个模型 · {count ? count + " 个账号" : "未配置"}
-                  </small>
-                </span>
-                <span
-                  className={
-                    active
-                      ? "account-indicator active"
-                      : count
-                        ? "account-indicator saved"
-                        : "account-indicator"
-                  }
-                />
-              </button>
-            );
-          })}
+          <ProviderSelector
+            className="settings-provider-selector"
+            label="厂商账号"
+            value={provider}
+            onChange={setProvider}
+            options={credentialProviderIds.map((id) => {
+              const count = accounts.filter((item) => item.provider === id).length;
+              const active = accounts.some((item) => item.provider === id && item.status === "active");
+              return {
+                id,
+                label: providerMeta[id].label,
+                mark: providerMeta[id].mark,
+                tone: providerMeta[id].tone,
+                detail: `${models.filter((item) => item.provider === id).length} 个模型 · ${count ? `${count} 个账号` : "未配置"}`,
+                indicator: active ? "active" as const : count ? "saved" as const : "idle" as const,
+              };
+            })}
+          />
           <div className="security-note">
             <ShieldCheck size={16} />
             <span>

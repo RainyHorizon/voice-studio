@@ -99,7 +99,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "0.8.0"))
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "0.9.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
@@ -466,6 +466,10 @@ class ImportVoiceBody(BaseModel):
 
 class ImportVoicesBody(BaseModel):
     voices: list[ImportVoiceBody] = Field(min_length=1, max_length=100)
+
+
+class RenameVoiceBody(BaseModel):
+    display_name: str = Field(min_length=1, max_length=100)
 
 
 class JobBatchBody(BaseModel):
@@ -1079,13 +1083,13 @@ async def test_provider_account(account_id: str):
 
 @app.get("/api/models")
 def list_models():
-    return [{**m.__dict__, "gateway_id": m.gateway_id} for m in available_models()]
+    return [{**m.__dict__, "gateway_id": m.gateway_id} for m in available_models() if m.provider != "demo"]
 
 
 @app.get("/api/voices")
 def list_voices():
     with db() as connection:
-        rows = connection.execute("SELECT * FROM voices WHERE status='active' ORDER BY created_at DESC").fetchall()
+        rows = connection.execute("SELECT * FROM voices WHERE status='active' AND provider!='demo' ORDER BY created_at DESC").fetchall()
     return [
         {
             **dict(row),
@@ -1269,6 +1273,22 @@ def remove_voice(voice_id: str):
         except ValueError:
             pass
     return {"deleted": True, "id": voice_id, "message": "已从 Voice Studio 音色库移除；厂商云端音色未删除。"}
+
+
+@app.patch("/api/voices/{voice_id}")
+def rename_voice(voice_id: str, body: RenameVoiceBody):
+    display_name = body.display_name.strip()
+    if not display_name:
+        raise HTTPException(400, "显示名称不能为空")
+    with db() as connection:
+        voice = connection.execute("SELECT * FROM voices WHERE id=? AND status='active'", (voice_id,)).fetchone()
+        if not voice:
+            raise HTTPException(404, "音色不存在或已经移除")
+        if voice["voice_type"] == "preset":
+            raise HTTPException(409, "预置音色不能重命名")
+        connection.execute("UPDATE voices SET display_name=? WHERE id=?", (display_name, voice_id))
+    updated = next(item for item in list_voices() if item["id"] == voice_id)
+    return {"voice": updated, "message": "音色显示名称已更新；兼容别名保持不变。"}
 
 
 @app.post("/api/voices/clone")
@@ -1462,7 +1482,7 @@ def voice_preview(voice_id: str):
 
 @app.get("/v1/models", dependencies=[Depends(require_gateway_key)])
 def openai_models():
-    items = [openai_model_item(m) for m in available_models()]
+    items = [openai_model_item(m) for m in available_models() if m.provider != "demo"]
     items += [{"id": "tts-default", "object": "model", "created": int(time.time()), "owned_by": "voice-studio"}, {"id": "tts-fast", "object": "model", "created": int(time.time()), "owned_by": "voice-studio"}, {"id": "tts-hq", "object": "model", "created": int(time.time()), "owned_by": "voice-studio"}]
     return {"object": "list", "data": items}
 
@@ -2108,7 +2128,7 @@ def gateway_stats(window: str = "7d", provider: str = ""):
     if window not in windows:
         raise HTTPException(status_code=400, detail={"message": "window 仅支持 24h、7d、30d、all", "code": "invalid_window"})
     cutoff = None if windows[window] is None else (datetime.now(timezone.utc) - windows[window]).isoformat()
-    clauses = []
+    clauses = ["provider != 'demo'"]
     params: list[str] = []
     if cutoff:
         clauses.append("created_at >= ?")
