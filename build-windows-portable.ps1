@@ -125,6 +125,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stagePath "tools") | Out-N
 Copy-Item -LiteralPath $ffmpeg -Destination (Join-Path $stagePath "tools\ffmpeg.exe")
 Copy-Item -LiteralPath $ffprobe -Destination (Join-Path $stagePath "tools\ffprobe.exe")
 Copy-Item -LiteralPath (Join-Path $projectRoot "portable\启动 Voice Studio.bat") -Destination (Join-Path $stagePath "启动 Voice Studio.bat")
+Copy-Item -LiteralPath (Join-Path $projectRoot "更新 Voice Studio.bat") -Destination (Join-Path $stagePath "更新 Voice Studio.bat")
+Copy-Item -LiteralPath (Join-Path $projectRoot "update.ps1") -Destination (Join-Path $stagePath "update.ps1")
 Copy-Item -LiteralPath (Join-Path $projectRoot "PORTABLE_README.md") -Destination (Join-Path $stagePath "便携版说明.md")
 Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination (Join-Path $stagePath "README.md")
 Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE") -Destination (Join-Path $stagePath "LICENSE")
@@ -136,6 +138,17 @@ if (Test-Path -LiteralPath $ffmpegReadme -PathType Leaf) {
 } else {
   & $ffmpeg -version 2>&1 | Set-Content -LiteralPath (Join-Path $stagePath "third_party\ffmpeg\README.txt") -Encoding UTF8
 }
+
+Set-Content -LiteralPath (Join-Path $stagePath "VERSION") -Value $Version -Encoding Ascii
+$managedManifestPath = Join-Path $stagePath ".voice-studio-files.txt"
+$stagePrefix = [System.IO.Path]::GetFullPath($stagePath).TrimEnd('\') + '\'
+$managedFiles = Get-ChildItem -LiteralPath $stagePath -File -Recurse | ForEach-Object {
+  $relative = $_.FullName.Substring($stagePrefix.Length)
+  if ($relative -notmatch '^(?i)data(\\|$)' -and $relative -ne ".voice-studio-files.txt") {
+    $relative.Replace('\', '/')
+  }
+} | Sort-Object
+Set-Content -LiteralPath $managedManifestPath -Value $managedFiles -Encoding UTF8
 
 $forbiddenFiles = Get-ChildItem -LiteralPath $stagePath -File -Recurse | Where-Object {
   $_.Name -in @("gateway.json", ".env") -or $_.Extension -in @(".db", ".sqlite", ".sqlite3", ".log", ".pyc", ".wav", ".mp3", ".flac", ".ogg", ".m4a")

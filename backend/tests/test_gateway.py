@@ -102,9 +102,45 @@ class GatewayEndpointTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(response.headers["x-voice-studio-mode"], "demo")
                     self.assertTrue(response.content.startswith(b"RIFF"))
+                    stats_response = await client.get("/api/gateway/stats?window=all")
+                    self.assertEqual(stats_response.status_code, 200)
+                    self.assertEqual(stats_response.json()["total_requests"], 0)
 
             with isolated_storage(main):
                 asyncio.run(run())
+
+    def test_public_catalog_hides_demo_and_custom_voice_can_be_renamed(self):
+        from app import main
+
+        async def run():
+            transport = httpx.ASGITransport(app=main.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                models_response = await client.get("/api/models")
+                voices_response = await client.get("/api/voices")
+                rename_response = await client.patch(
+                    "/api/voices/voice_custom_rename",
+                    json={"display_name": "新的显示名称"},
+                )
+                preset_response = await client.patch(
+                    "/api/voices/voice_narrator",
+                    json={"display_name": "不能修改"},
+                )
+
+            self.assertTrue(all(item["provider"] != "demo" for item in models_response.json()))
+            self.assertTrue(all(item["provider"] != "demo" for item in voices_response.json()))
+            self.assertEqual(rename_response.status_code, 200)
+            renamed = rename_response.json()["voice"]
+            self.assertEqual(renamed["display_name"], "新的显示名称")
+            self.assertEqual(renamed["public_name"], "stable-api-id")
+            self.assertEqual(preset_response.status_code, 409)
+
+        with isolated_storage(main):
+            with main.db() as connection:
+                connection.execute(
+                    "INSERT INTO voices (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    ("voice_custom_rename", "minimax", "speech-2.8-turbo", "remote-id", "旧名称", "stable-api-id", "cloned", "active", '["zh-CN"]', main.now()),
+                )
+            asyncio.run(run())
 
     def test_local_security_guards_and_endpoint_allowlist(self):
         from app import main

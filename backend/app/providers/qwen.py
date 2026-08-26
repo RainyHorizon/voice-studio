@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import AsyncIterator
@@ -15,6 +16,23 @@ from .base import ProviderError, ProviderModel, SpeechProvider, SynthesisRequest
 DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com"
 TTS_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 VOICE_PATH = "/api/v1/services/audio/tts/customization"
+SPEECH_SYNTHESIZER_PATH = "/api/v1/services/audio/tts/SpeechSynthesizer"
+
+VOICE_ENROLLMENT_DESIGN_MODELS = {
+    "cosyvoice-v3.5-plus",
+    "cosyvoice-v3.5-flash",
+    "cosyvoice-v3-plus",
+    "cosyvoice-v3-flash",
+    "qwen-audio-3.0-tts-plus",
+    "qwen-audio-3.0-tts-flash",
+}
+QWEN_AUDIO_MODELS = {"qwen-audio-3.0-tts-plus", "qwen-audio-3.0-tts-flash"}
+COSYVOICE_STREAMING_MODELS = {
+    "cosyvoice-v3.5-plus",
+    "cosyvoice-v3.5-flash",
+    "cosyvoice-v3-plus",
+    "cosyvoice-v3-flash",
+}
 
 QWEN_MODELS = [
     ProviderModel(
@@ -63,7 +81,10 @@ QWEN_MODELS = [
         ["zh-CN", "en-US", "ja-JP", "ko-KR"],
         False,
         "provider",
-        ["synthesis"],
+        ["synthesis", "design"],
+        500,
+        15,
+        200,
     ),
     ProviderModel(
         "dashscope",
@@ -75,7 +96,70 @@ QWEN_MODELS = [
         ["zh-CN", "en-US", "ja-JP", "ko-KR"],
         False,
         "provider",
-        ["synthesis"],
+        ["synthesis", "design"],
+        500,
+        15,
+        200,
+    ),
+    ProviderModel(
+        "dashscope",
+        "cosyvoice-v3.5-flash",
+        "CosyVoice V3.5 Flash",
+        "tts",
+        "自然",
+        "快",
+        ["zh-CN", "en-US", "ja-JP", "ko-KR"],
+        False,
+        "provider",
+        ["synthesis", "design"],
+        500,
+        15,
+        200,
+    ),
+    ProviderModel(
+        "dashscope",
+        "cosyvoice-v3.5-plus",
+        "CosyVoice V3.5 Plus",
+        "tts",
+        "专业",
+        "中",
+        ["zh-CN", "en-US", "ja-JP", "ko-KR"],
+        False,
+        "provider",
+        ["synthesis", "design"],
+        500,
+        15,
+        200,
+    ),
+    ProviderModel(
+        "dashscope",
+        "qwen-audio-3.0-tts-flash",
+        "Qwen Audio 3.0 TTS Flash",
+        "tts",
+        "均衡",
+        "快",
+        ["zh-CN", "en-US", "ja-JP", "ko-KR"],
+        False,
+        "provider",
+        ["synthesis", "design"],
+        500,
+        15,
+        200,
+    ),
+    ProviderModel(
+        "dashscope",
+        "qwen-audio-3.0-tts-plus",
+        "Qwen Audio 3.0 TTS Plus",
+        "tts",
+        "专业",
+        "中",
+        ["zh-CN", "en-US", "ja-JP", "ko-KR"],
+        False,
+        "provider",
+        ["synthesis", "design"],
+        500,
+        15,
+        200,
     ),
     ProviderModel(
         "dashscope",
@@ -88,6 +172,9 @@ QWEN_MODELS = [
         False,
         "provider",
         ["synthesis", "design"],
+        2048,
+        1,
+        1024,
     ),
 ]
 
@@ -185,15 +272,42 @@ class QwenProvider(SpeechProvider):
         target_model: str,
         preferred_name: str,
     ) -> dict:
-        payload = {
-            "model": "qwen-voice-design",
-            "input": {
+        if target_model in VOICE_ENROLLMENT_DESIGN_MODELS:
+            if len(prompt) > 500:
+                raise ProviderError("该千问模型的声音描述最多 500 个字符", code="input_too_long", status=400)
+            if not 15 <= len(preview_text) <= 200:
+                raise ProviderError("该千问模型的试听文本需要 15 到 200 个字符", code="invalid_preview_text", status=400)
+            prefix = re.sub(r"[^A-Za-z0-9]", "", preferred_name)[:10] or "vsvoice"
+            language_hint = "zh" if re.search(r"[\u3400-\u9fff]", prompt + preview_text) else "en"
+            input_data = {
+                "action": "create_voice",
+                "target_model": target_model,
+                "voice_prompt": prompt,
+                "preview_text": preview_text,
+                "prefix": prefix,
+                "language_hints": [language_hint],
+            }
+            design_model = "voice-enrollment"
+            voice_field = "voice_id"
+        else:
+            if target_model != "qwen3-tts-vd-2026-01-26":
+                raise ProviderError("当前千问声音设计模型不受支持", code="unsupported_provider_model", status=400)
+            if len(prompt) > 2048:
+                raise ProviderError("Qwen3 TTS 声音描述最多 2048 个字符", code="input_too_long", status=400)
+            if len(preview_text) > 1024:
+                raise ProviderError("Qwen3 TTS 试听文本最多 1024 个字符", code="input_too_long", status=400)
+            input_data = {
                 "action": "create",
                 "target_model": target_model,
                 "preferred_name": preferred_name,
                 "voice_prompt": prompt,
                 "preview_text": preview_text,
-            },
+            }
+            design_model = "qwen-voice-design"
+            voice_field = "voice"
+        payload = {
+            "model": design_model,
+            "input": input_data,
             "parameters": {"sample_rate": 24000, "response_format": "wav"},
         }
         try:
@@ -210,7 +324,7 @@ class QwenProvider(SpeechProvider):
         try:
             body = response.json()
             output = body.get("output") or {}
-            voice_id = str(output["voice"])
+            voice_id = str(output[voice_field])
         except (KeyError, TypeError, ValueError) as exc:
             raise ProviderError("千问返回的设计音色数据无效", code="invalid_provider_response") from exc
         preview_audio = b""
@@ -227,7 +341,7 @@ class QwenProvider(SpeechProvider):
         }
 
     def supports_native_streaming(self, model: str) -> bool:
-        return model.split("/", 1)[-1] in {"cosyvoice-v3-flash", "cosyvoice-v3-plus"}
+        return model.split("/", 1)[-1] in COSYVOICE_STREAMING_MODELS
 
     async def stream_synthesize(self, request: SynthesisRequest) -> AsyncIterator[dict]:
         """Bridge CosyVoice WebSocket callbacks into the gateway async stream."""
@@ -318,6 +432,8 @@ class QwenProvider(SpeechProvider):
             raise ProviderError("Qwen3 TTS 单次最多合成 600 个字符", code="input_too_long", status=400)
         if model_id.startswith("cosyvoice-"):
             return await self._synthesize_cosyvoice(request, output, model_id)
+        if model_id in QWEN_AUDIO_MODELS:
+            return await self._synthesize_speech_synthesizer(request, output, model_id)
 
         input_data: dict[str, object] = {
             "text": request.text,
@@ -354,6 +470,55 @@ class QwenProvider(SpeechProvider):
         except (httpx.HTTPError, ValueError) as exc:
             raise ProviderError("无法连接通义千问语音接口", code="provider_unreachable") from exc
 
+        duration_ms = _write_wav(audio_response.content, output, request.speed)
+        return {
+            "provider_request_id": body.get("request_id", ""),
+            "duration_ms": duration_ms,
+            "demo": False,
+        }
+
+    async def _synthesize_speech_synthesizer(
+        self,
+        request: SynthesisRequest,
+        output: Path,
+        model_id: str,
+    ) -> dict:
+        input_data: dict[str, object] = {
+            "text": request.text,
+            "voice": request.voice,
+            "format": "wav",
+            "sample_rate": 24000,
+        }
+        if request.instructions:
+            input_data["instruction"] = request.instructions
+        payload = {"model": model_id, "input": input_data}
+        try:
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+                response = await client.post(
+                    self.endpoint + SPEECH_SYNTHESIZER_PATH,
+                    headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"},
+                    json=payload,
+                )
+                if response.status_code != 200:
+                    status = 401 if response.status_code in {401, 403} else 502
+                    raise ProviderError(
+                        _remote_error(response, "千问语音合成失败"),
+                        code="qwen_synthesis_failed",
+                        status=status,
+                    )
+                body = response.json()
+                remote_output = body.get("output") or {}
+                audio = remote_output.get("audio") or {}
+                audio_url = audio.get("url") if isinstance(audio, dict) else None
+                audio_url = audio_url or remote_output.get("audio_url")
+                if not audio_url:
+                    raise ProviderError("千问响应中没有音频地址", code="invalid_provider_response")
+                audio_response = await client.get(audio_url)
+                audio_response.raise_for_status()
+        except ProviderError:
+            raise
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ProviderError("无法连接通义千问语音接口", code="provider_unreachable") from exc
         duration_ms = _write_wav(audio_response.content, output, request.speed)
         return {
             "provider_request_id": body.get("request_id", ""),

@@ -70,6 +70,7 @@ jobs:
           name: windows-package
           path: |
             output/releases/Voice-Studio-*-Windows.zip
+            output/releases/Voice-Studio-*-Windows.zip.sha256
             output/releases/Voice-Studio-*-Windows-Portable.zip
             output/releases/Voice-Studio-*-Windows-Portable.zip.sha256
 
@@ -111,17 +112,30 @@ jobs:
         run: |
           version="${RELEASE_VERSION#v}"
           package="Voice-Studio-${version}-${PLATFORM_LABEL}"
-          mkdir -p "dist/${package}/frontend" "dist/${package}/backend"
+          mkdir -p "dist/${package}/frontend" "dist/${package}/backend" "dist/${package}/data/audio"
           cp -R backend/app "dist/${package}/backend/"
           cp backend/requirements.txt "dist/${package}/backend/"
           cp -R frontend/dist "dist/${package}/frontend/"
-          cp start.sh README.md LICENSE .gitattributes "dist/${package}/"
+          cp start.sh update.sh README.md LICENSE .gitattributes "dist/${package}/"
+          chmod +x "dist/${package}/start.sh" "dist/${package}/update.sh"
+          printf '%s\n' "$version" > "dist/${package}/VERSION"
+          find "dist/${package}" -type f \
+            ! -path "dist/${package}/data/*" \
+            ! -name '.voice-studio-files.txt' \
+            -print | sed "s#^dist/${package}/##" | LC_ALL=C sort > "dist/${package}/.voice-studio-files.txt"
           tar -czf "dist/${package}.tar.gz" -C dist "${package}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256")
+          else
+            (cd dist && shasum -a 256 "${package}.tar.gz" > "${package}.tar.gz.sha256")
+          fi
       - name: Upload Unix package
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.label }}-package
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
 
   publish:
     name: Publish GitHub Release

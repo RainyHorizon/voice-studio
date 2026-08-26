@@ -15,6 +15,9 @@ class ProviderModel:
     supports_clone: bool
     mode: str = "demo"
     operations: list[str] = field(default_factory=lambda: ["synthesis"])
+    design_prompt_max: int | None = None
+    design_preview_min: int | None = None
+    design_preview_max: int | None = None
 
     @property
     def gateway_id(self) -> str:

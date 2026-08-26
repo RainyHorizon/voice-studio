@@ -99,7 +99,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "0.8.0"))
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.1.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
@@ -268,6 +268,10 @@ def init_db() -> None:
         voice_columns = {row[1] for row in connection.execute("PRAGMA table_info(voices)").fetchall()}
         if "design_prompt" not in voice_columns:
             connection.execute("ALTER TABLE voices ADD COLUMN design_prompt TEXT NOT NULL DEFAULT ''")
+        connection.execute(
+            """UPDATE voices SET model_id='minimax-voice-design'
+               WHERE provider='minimax' AND voice_type='design' AND model_id='speech-2.8-turbo'"""
+        )
         job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()}
         if "input_text" not in job_columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN input_text TEXT NOT NULL DEFAULT ''")
@@ -468,6 +472,10 @@ class ImportVoicesBody(BaseModel):
     voices: list[ImportVoiceBody] = Field(min_length=1, max_length=100)
 
 
+class RenameVoiceBody(BaseModel):
+    display_name: str = Field(min_length=1, max_length=100)
+
+
 class JobBatchBody(BaseModel):
     job_ids: list[str] = Field(default_factory=list, max_length=500)
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
@@ -494,7 +502,7 @@ class ProviderAccountBody(BaseModel):
 class VoiceDesignBody(BaseModel):
     provider: str
     model_id: str
-    prompt: str = Field(min_length=8, max_length=2000)
+    prompt: str = Field(min_length=8, max_length=2048)
     preview_text: str = Field(min_length=1, max_length=2000)
     display_name: str = Field(min_length=1, max_length=100)
     public_name: str = Field(min_length=1, max_length=100)
@@ -585,7 +593,7 @@ def openai_model_item(model, requested_id: str | None = None) -> dict[str, Any]:
         model.provider == "volcengine"
         or model.provider == "minimax"
         or (model.provider == "mimo" and model.model_id != "mimo-v2.5-tts-voicedesign")
-        or (model.provider == "dashscope" and model.model_id in {"cosyvoice-v3-flash", "cosyvoice-v3-plus"})
+        or (model.provider == "dashscope" and model.model_id in {"cosyvoice-v3-flash", "cosyvoice-v3-plus", "cosyvoice-v3.5-flash", "cosyvoice-v3.5-plus"})
     )
     return {
         "id": requested_id or model.gateway_id,
@@ -598,6 +606,9 @@ def openai_model_item(model, requested_id: str | None = None) -> dict[str, Any]:
             "supports_clone": model.supports_clone,
             "native_streaming": native_streaming,
             "native_stream_formats": ["pcm"] if (model.provider == "mimo" and model.model_id != "mimo-v2.5-tts-voicedesign") else (["mp3"] if native_streaming else []),
+            "design_prompt_max": model.design_prompt_max,
+            "design_preview_min": model.design_preview_min,
+            "design_preview_max": model.design_preview_max,
         },
     }
 
@@ -1079,13 +1090,13 @@ async def test_provider_account(account_id: str):
 
 @app.get("/api/models")
 def list_models():
-    return [{**m.__dict__, "gateway_id": m.gateway_id} for m in available_models()]
+    return [{**m.__dict__, "gateway_id": m.gateway_id} for m in available_models() if m.provider != "demo"]
 
 
 @app.get("/api/voices")
 def list_voices():
     with db() as connection:
-        rows = connection.execute("SELECT * FROM voices WHERE status='active' ORDER BY created_at DESC").fetchall()
+        rows = connection.execute("SELECT * FROM voices WHERE status='active' AND provider!='demo' ORDER BY created_at DESC").fetchall()
     return [
         {
             **dict(row),
@@ -1271,6 +1282,22 @@ def remove_voice(voice_id: str):
     return {"deleted": True, "id": voice_id, "message": "已从 Voice Studio 音色库移除；厂商云端音色未删除。"}
 
 
+@app.patch("/api/voices/{voice_id}")
+def rename_voice(voice_id: str, body: RenameVoiceBody):
+    display_name = body.display_name.strip()
+    if not display_name:
+        raise HTTPException(400, "显示名称不能为空")
+    with db() as connection:
+        voice = connection.execute("SELECT * FROM voices WHERE id=? AND status='active'", (voice_id,)).fetchone()
+        if not voice:
+            raise HTTPException(404, "音色不存在或已经移除")
+        if voice["voice_type"] == "preset":
+            raise HTTPException(409, "预置音色不能重命名")
+        connection.execute("UPDATE voices SET display_name=? WHERE id=?", (display_name, voice_id))
+    updated = next(item for item in list_voices() if item["id"] == voice_id)
+    return {"voice": updated, "message": "音色显示名称已更新；兼容别名保持不变。"}
+
+
 @app.post("/api/voices/clone")
 async def clone_voice(provider_name: str, model_id: str, display_name: str, public_name: str, audio: UploadFile = File(...)):
     model = resolve_model(f"{provider_name}/{model_id}")
@@ -1370,6 +1397,12 @@ async def design_voice(body: VoiceDesignBody):
     public_name = body.public_name.strip()
     prompt = body.prompt.strip()
     preview_text = body.preview_text.strip()
+    if model.design_prompt_max is not None and len(prompt) > model.design_prompt_max:
+        raise HTTPException(400, f"声音描述最多 {model.design_prompt_max} 个字符")
+    if model.design_preview_min is not None and len(preview_text) < model.design_preview_min:
+        raise HTTPException(400, f"试听文本至少需要 {model.design_preview_min} 个字符")
+    if model.design_preview_max is not None and len(preview_text) > model.design_preview_max:
+        raise HTTPException(400, f"试听文本最多 {model.design_preview_max} 个字符")
     with db() as connection:
         if connection.execute("SELECT 1 FROM voices WHERE public_name=? AND status='active'", (public_name,)).fetchone():
             raise HTTPException(409, "兼容别名已存在，请换一个名称")
@@ -1462,7 +1495,7 @@ def voice_preview(voice_id: str):
 
 @app.get("/v1/models", dependencies=[Depends(require_gateway_key)])
 def openai_models():
-    items = [openai_model_item(m) for m in available_models()]
+    items = [openai_model_item(m) for m in available_models() if m.provider != "demo"]
     items += [{"id": "tts-default", "object": "model", "created": int(time.time()), "owned_by": "voice-studio"}, {"id": "tts-fast", "object": "model", "created": int(time.time()), "owned_by": "voice-studio"}, {"id": "tts-hq", "object": "model", "created": int(time.time()), "owned_by": "voice-studio"}]
     return {"object": "list", "data": items}
 
@@ -2108,7 +2141,7 @@ def gateway_stats(window: str = "7d", provider: str = ""):
     if window not in windows:
         raise HTTPException(status_code=400, detail={"message": "window 仅支持 24h、7d、30d、all", "code": "invalid_window"})
     cutoff = None if windows[window] is None else (datetime.now(timezone.utc) - windows[window]).isoformat()
-    clauses = []
+    clauses = ["provider != 'demo'"]
     params: list[str] = []
     if cutoff:
         clauses.append("created_at >= ?")
