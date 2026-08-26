@@ -7,11 +7,22 @@
 3. 等待浏览器自动打开 Voice Studio。
 4. 使用期间不要关闭启动窗口；关闭窗口即可停止服务。
 
+## 更新
+
+1. 先关闭正在运行的 Voice Studio。
+2. 双击 `更新 Voice Studio.bat`。
+3. 确认显示的当前版本和 GitHub 最新正式版本，输入 `Y` 开始更新。
+4. 更新完成后可直接选择重新启动。
+
+更新器会自动识别当前的 Windows 安装方式。便携版只从 `RainyHorizon/voice-studio` 的 GitHub Releases 下载 Windows Portable 版本，并在替换程序前验证 SHA256。`data` 文件夹、Windows Credential Manager 中的厂商密钥以及目录内其他非程序文件不会被删除。
+
+首次获得更新器之前安装的旧版本，仍需手动下载一次包含更新器的新便携版；以后即可使用这个入口更新。
+
 便携版已包含 Python 运行时、后端依赖、前端文件、FFmpeg 和 FFprobe，不需要另外安装 Python、Node.js 或 FFmpeg。
 
 ## 数据位置
 
-数据库、生成音频和网关配置保存在程序目录的 `data` 文件夹。升级时请保留这个文件夹，卸载时可以直接删除整个程序目录。
+数据库、生成音频和网关配置保存在程序目录的 `data` 文件夹。自动更新会保留这个文件夹；手动升级时也请保留它。卸载时可以直接删除整个程序目录。
 
 厂商 API Key、火山引擎 AK/SK 仍保存在当前 Windows 用户的 Credential Manager 中，不会写入程序目录。
 

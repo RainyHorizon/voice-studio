@@ -1,17 +1,36 @@
 import asyncio
 import base64
 import json
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
 from app.providers.base import SynthesisRequest
-from app.providers.qwen import QwenProvider
+from app.providers.base import ProviderError
+from app.providers.qwen import QWEN_MODELS, QwenProvider
 
 
 class QwenVoiceListTests(unittest.TestCase):
+    def test_catalog_exposes_only_non_realtime_design_models(self):
+        design_models = {item.model_id: item for item in QWEN_MODELS if "design" in item.operations}
+        self.assertEqual(
+            set(design_models),
+            {
+                "qwen3-tts-vd-2026-01-26",
+                "cosyvoice-v3-flash",
+                "cosyvoice-v3-plus",
+                "cosyvoice-v3.5-flash",
+                "cosyvoice-v3.5-plus",
+                "qwen-audio-3.0-tts-flash",
+                "qwen-audio-3.0-tts-plus",
+            },
+        )
+        self.assertFalse(any("realtime" in model_id for model_id in design_models))
+
     def test_voice_design_uses_design_model_and_decodes_preview_audio(self):
         preview = b"RIFFtestWAVE"
 
@@ -55,6 +74,90 @@ class QwenVoiceListTests(unittest.TestCase):
         self.assertEqual(result["voice_id"], "qwen_vd_test")
         self.assertEqual(result["preview_audio"], preview)
         self.assertEqual(result["request_id"], "request-test")
+
+    def test_voice_enrollment_design_uses_voice_id_response(self):
+        preview = b"RIFFtestWAVE"
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            self.assertEqual(payload["model"], "voice-enrollment")
+            self.assertEqual(
+                payload["input"],
+                {
+                    "action": "create_voice",
+                    "target_model": "cosyvoice-v3.5-plus",
+                    "voice_prompt": "沉稳的中年男性，音色低沉浑厚",
+                    "preview_text": "各位听众朋友们大家好，欢迎收听本期节目",
+                    "prefix": "vstest1234",
+                    "language_hints": ["zh"],
+                },
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "output": {
+                        "voice_id": "cosyvoice-v3.5-plus-vd-test",
+                        "preview_audio": {"data": base64.b64encode(preview).decode("ascii")},
+                    },
+                    "request_id": "request-enrollment",
+                },
+            )
+
+        real_client = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+        with patch("app.providers.qwen.httpx.AsyncClient", side_effect=lambda **kwargs: real_client(transport=transport, **kwargs)):
+            result = asyncio.run(
+                QwenProvider("secret").create_voice_design(
+                    "沉稳的中年男性，音色低沉浑厚",
+                    "各位听众朋友们大家好，欢迎收听本期节目",
+                    "cosyvoice-v3.5-plus",
+                    "vs_test-123456",
+                )
+            )
+        self.assertEqual(result["voice_id"], "cosyvoice-v3.5-plus-vd-test")
+        self.assertEqual(result["preview_audio"], preview)
+
+    def test_voice_enrollment_validates_text_limits_before_request(self):
+        provider = QwenProvider("secret")
+        with self.assertRaisesRegex(ProviderError, "最多 500"):
+            asyncio.run(provider.create_voice_design("声" * 501, "这是一段足够长的试听文本内容", "cosyvoice-v3-flash", "test"))
+        with self.assertRaisesRegex(ProviderError, "15 到 200"):
+            asyncio.run(provider.create_voice_design("清晰自然的年轻女声", "文本太短", "qwen-audio-3.0-tts-flash", "test"))
+        with self.assertRaisesRegex(ProviderError, "15 到 200"):
+            asyncio.run(provider.create_voice_design("清晰自然的年轻女声", "试" * 201, "qwen-audio-3.0-tts-flash", "test"))
+
+    def test_qwen_audio_synthesis_downloads_returned_audio_url(self):
+        requests: list[tuple[str, str]] = []
+        audio = b"RIFFtestWAVE"
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append((request.method, request.url.path))
+            if request.method == "POST":
+                payload = json.loads(request.content)
+                self.assertEqual(payload["model"], "qwen-audio-3.0-tts-flash")
+                self.assertEqual(
+                    payload["input"],
+                    {"text": "你好", "voice": "voice-test", "format": "wav", "sample_rate": 24000},
+                )
+                return httpx.Response(200, json={"output": {"audio": {"url": "https://audio.example/test.wav"}}, "request_id": "request-audio"})
+            return httpx.Response(200, content=audio)
+
+        real_client = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "app.providers.qwen.httpx.AsyncClient",
+            side_effect=lambda **kwargs: real_client(transport=transport, **kwargs),
+        ), patch("app.providers.qwen._write_wav", return_value=1234) as write_wav:
+            output = Path(folder) / "result.wav"
+            result = asyncio.run(
+                QwenProvider("secret").synthesize(
+                    SynthesisRequest("dashscope/qwen-audio-3.0-tts-flash", "voice-test", "你好"),
+                    output,
+                )
+            )
+        write_wav.assert_called_once_with(audio, output, 1.0)
+        self.assertEqual(result["duration_ms"], 1234)
+        self.assertEqual(requests, [("POST", "/api/v1/services/audio/tts/SpeechSynthesizer"), ("GET", "/test.wav")])
 
     def test_lists_paginated_voices_with_bound_model(self):
         requests = []

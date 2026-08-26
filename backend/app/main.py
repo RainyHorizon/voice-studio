@@ -99,7 +99,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "0.9.0"))
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.1.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
@@ -268,6 +268,10 @@ def init_db() -> None:
         voice_columns = {row[1] for row in connection.execute("PRAGMA table_info(voices)").fetchall()}
         if "design_prompt" not in voice_columns:
             connection.execute("ALTER TABLE voices ADD COLUMN design_prompt TEXT NOT NULL DEFAULT ''")
+        connection.execute(
+            """UPDATE voices SET model_id='minimax-voice-design'
+               WHERE provider='minimax' AND voice_type='design' AND model_id='speech-2.8-turbo'"""
+        )
         job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()}
         if "input_text" not in job_columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN input_text TEXT NOT NULL DEFAULT ''")
@@ -498,7 +502,7 @@ class ProviderAccountBody(BaseModel):
 class VoiceDesignBody(BaseModel):
     provider: str
     model_id: str
-    prompt: str = Field(min_length=8, max_length=2000)
+    prompt: str = Field(min_length=8, max_length=2048)
     preview_text: str = Field(min_length=1, max_length=2000)
     display_name: str = Field(min_length=1, max_length=100)
     public_name: str = Field(min_length=1, max_length=100)
@@ -589,7 +593,7 @@ def openai_model_item(model, requested_id: str | None = None) -> dict[str, Any]:
         model.provider == "volcengine"
         or model.provider == "minimax"
         or (model.provider == "mimo" and model.model_id != "mimo-v2.5-tts-voicedesign")
-        or (model.provider == "dashscope" and model.model_id in {"cosyvoice-v3-flash", "cosyvoice-v3-plus"})
+        or (model.provider == "dashscope" and model.model_id in {"cosyvoice-v3-flash", "cosyvoice-v3-plus", "cosyvoice-v3.5-flash", "cosyvoice-v3.5-plus"})
     )
     return {
         "id": requested_id or model.gateway_id,
@@ -602,6 +606,9 @@ def openai_model_item(model, requested_id: str | None = None) -> dict[str, Any]:
             "supports_clone": model.supports_clone,
             "native_streaming": native_streaming,
             "native_stream_formats": ["pcm"] if (model.provider == "mimo" and model.model_id != "mimo-v2.5-tts-voicedesign") else (["mp3"] if native_streaming else []),
+            "design_prompt_max": model.design_prompt_max,
+            "design_preview_min": model.design_preview_min,
+            "design_preview_max": model.design_preview_max,
         },
     }
 
@@ -1390,6 +1397,12 @@ async def design_voice(body: VoiceDesignBody):
     public_name = body.public_name.strip()
     prompt = body.prompt.strip()
     preview_text = body.preview_text.strip()
+    if model.design_prompt_max is not None and len(prompt) > model.design_prompt_max:
+        raise HTTPException(400, f"声音描述最多 {model.design_prompt_max} 个字符")
+    if model.design_preview_min is not None and len(preview_text) < model.design_preview_min:
+        raise HTTPException(400, f"试听文本至少需要 {model.design_preview_min} 个字符")
+    if model.design_preview_max is not None and len(preview_text) > model.design_preview_max:
+        raise HTTPException(400, f"试听文本最多 {model.design_preview_max} 个字符")
     with db() as connection:
         if connection.execute("SELECT 1 FROM voices WHERE public_name=? AND status='active'", (public_name,)).fetchone():
             raise HTTPException(409, "兼容别名已存在，请换一个名称")

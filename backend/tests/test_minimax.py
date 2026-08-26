@@ -10,10 +10,46 @@ import httpx
 
 from app.providers.base import SynthesisRequest
 from app.providers.base import ProviderError
-from app.providers.minimax import MiniMaxProvider
+from app.providers.minimax import MINIMAX_MODELS, MiniMaxProvider
 
 
 class MiniMaxProviderTests(unittest.TestCase):
+    def test_voice_design_has_a_dedicated_catalog_model(self):
+        models = {item.model_id: item for item in MINIMAX_MODELS}
+        self.assertNotIn("design", models["speech-2.8-turbo"].operations)
+        self.assertEqual(models["minimax-voice-design"].operations, ["design"])
+
+    def test_voice_design_does_not_send_a_synthesis_model(self):
+        async def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/v1/voice_design")
+            payload = json.loads(request.content)
+            self.assertEqual(
+                payload,
+                {"prompt": "温和沉稳的成年男声", "preview_text": "你好，这是试听文本。", "voice_id": "vs_test"},
+            )
+            self.assertNotIn("model", payload)
+            return httpx.Response(
+                200,
+                json={
+                    "voice_id": "vs_test",
+                    "trial_audio": "",
+                    "trace_id": "trace-design",
+                    "base_resp": {"status_code": 0},
+                },
+            )
+
+        real_client = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+        with patch("app.providers.minimax.httpx.AsyncClient", side_effect=lambda **kwargs: real_client(transport=transport, **kwargs)):
+            result = asyncio.run(
+                MiniMaxProvider("secret").create_voice_design(
+                    "温和沉稳的成年男声",
+                    "你好，这是试听文本。",
+                    "vs_test",
+                )
+            )
+        self.assertEqual(result["voice_id"], "vs_test")
+
     def test_business_error_is_preserved(self):
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"data": None, "base_resp": {"status_code": 1008, "status_msg": "余额不足"}})

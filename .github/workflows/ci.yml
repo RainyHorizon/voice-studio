@@ -52,6 +52,7 @@ jobs:
         run: |
           $scripts = @(
             'start.ps1',
+            'update.ps1',
             'build-windows-release.ps1',
             'build-windows-portable.ps1'
           )
@@ -73,6 +74,10 @@ jobs:
               throw "$script failed to parse: $($errors | Out-String)"
             }
           }
+
+      - name: Validate Unix shell scripts
+        if: runner.os != 'Windows'
+        run: bash -n start.sh update.sh
 
       - name: Install backend dependencies
         run: python -m pip install -r backend/requirements.txt

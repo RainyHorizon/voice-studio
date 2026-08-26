@@ -25,9 +25,24 @@ SUPPORTED_MODELS = {
 
 MINIMAX_MODELS = [
     ProviderModel("minimax", "speech-2.8-hd", "Speech 2.8 HD", "tts", "高保真", "中", ["zh-CN", "en-US", "ja-JP"], True, "provider", ["synthesis", "clone"]),
-    ProviderModel("minimax", "speech-2.8-turbo", "Speech 2.8 Turbo", "tts", "均衡", "快", ["zh-CN", "en-US", "ja-JP"], True, "provider", ["synthesis", "clone", "design"]),
+    ProviderModel("minimax", "speech-2.8-turbo", "Speech 2.8 Turbo", "tts", "均衡", "快", ["zh-CN", "en-US", "ja-JP"], True, "provider", ["synthesis", "clone"]),
     ProviderModel("minimax", "speech-2.6-hd", "Speech 2.6 HD", "tts", "细腻", "中", ["zh-CN", "en-US", "ja-JP"], True, "provider", ["synthesis", "clone"]),
     ProviderModel("minimax", "speech-2.6-turbo", "Speech 2.6 Turbo", "tts", "高效", "快", ["zh-CN", "en-US", "ja-JP"], True, "provider", ["synthesis", "clone"]),
+    ProviderModel(
+        "minimax",
+        "minimax-voice-design",
+        "MiniMax Voice Design",
+        "voice_design",
+        "设计",
+        "中",
+        ["zh-CN", "en-US"],
+        False,
+        "provider",
+        ["design"],
+        2000,
+        1,
+        2000,
+    ),
 ]
 
 

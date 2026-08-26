@@ -64,6 +64,9 @@ type Model = {
   supports_clone: boolean;
   mode: "demo" | "provider";
   operations: string[];
+  design_prompt_max?: number | null;
+  design_preview_min?: number | null;
+  design_preview_max?: number | null;
 };
 type CloneConfig = {
   provider: string;
@@ -462,7 +465,13 @@ export default function App() {
       body: JSON.stringify(config),
     });
     setVoices((current) => [created.voice, ...current]);
-    setModel(created.voice.provider + "/" + created.voice.model_id);
+    const compatibleModel = models.find(
+      (item) =>
+        item.provider === created.voice.provider &&
+        item.operations.includes("synthesis") &&
+        (item.provider === "minimax" || item.model_id === created.voice.model_id),
+    );
+    if (compatibleModel) setModel(compatibleModel.gateway_id);
     setVoice(created.voice.public_name);
     setNotice(created.message);
     return created.voice;
@@ -881,7 +890,7 @@ function VoiceLibrary({
   const [showImport, setShowImport] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Voice | null>(null);
   const scoped = scope === "mine"
-    ? voices.filter((item) => ["cloned", "design"].includes(item.voice_type))
+    ? voices.filter((item) => ["cloned", "design", "imported"].includes(item.voice_type))
     : voices;
   const filtered = provider === "all"
     ? scoped
@@ -942,7 +951,6 @@ function VoiceLibrary({
           <span>来源 / 模型</span>
           <span>类型</span>
           <span>语言</span>
-          <span>状态</span>
           <span />
         </div>
         {filtered.length ? (
@@ -976,20 +984,16 @@ function VoiceLibrary({
                     : "预置"}
               </span>
               <span>{item.languages.join(" · ")}</span>
-              <span className="status">
-                <span className="live-dot" />
-                可用
-              </span>
               <div className="voice-actions">
                 <button className="voice-use-button" onClick={() => onUse(item)}>使用</button>
-                {item.voice_type !== "preset" && <button
+                {item.voice_type !== "preset" ? <button
                   className="icon-button rename-voice"
                   title="重命名"
                   aria-label={`重命名 ${item.display_name}`}
                   onClick={() => setRenameTarget(item)}
                 >
                   <Pencil size={16} />
-                </button>}
+                </button> : <span className="voice-action-placeholder" aria-hidden="true" />}
                 <button
                   className="icon-button delete-voice"
                   title="从音色库移除"
@@ -1495,8 +1499,11 @@ function VoiceDesignPanel({
   const [previewVoice, setPreviewVoice] = useState<Voice | null>(null);
   const providerModels = designModels.filter((item) => item.provider === provider);
   const selected = designModels.find((item) => item.provider === provider && item.model_id === modelId);
-  const promptLimit = 2000;
-  const previewLimit = 2000;
+  const promptLimit = selected?.design_prompt_max ?? 2000;
+  const previewMin = selected?.design_preview_min ?? 1;
+  const previewLimit = selected?.design_preview_max ?? 2000;
+  const promptInvalid = prompt.length > promptLimit;
+  const previewInvalid = previewText.length < previewMin || previewText.length > previewLimit;
   const designProviderIds = credentialProviderIds.filter((id) =>
     designModels.some((item) => item.provider === id),
   );
@@ -1517,7 +1524,7 @@ function VoiceDesignPanel({
     setPreviewVoice(null);
   };
   const submit = async () => {
-    if (!selected || !prompt.trim() || !previewText.trim() || !displayName.trim() || !publicName.trim()) return;
+    if (!selected || !prompt.trim() || !previewText.trim() || promptInvalid || previewInvalid || !displayName.trim() || !publicName.trim()) return;
     setWorking(true);
     try {
       const voice = await onDesign({
@@ -1545,46 +1552,53 @@ function VoiceDesignPanel({
       <div className="design-layout">
         <div className="design-form">
           <h3 className="design-section-title">选择设计引擎</h3>
-          <ProviderSelector
-            className="design-provider-selector"
-            label="声音设计厂商"
-            value={provider}
-            onChange={chooseProvider}
-            options={designProviderIds.map((id) => ({
-              id,
-              label: providerMeta[id].label,
-              mark: providerMeta[id].mark,
-              tone: providerMeta[id].tone,
-              detail: `${designModels.filter((item) => item.provider === id).length} 个设计模型`,
-            }))}
-          />
-          <div className="design-model-field">
-            <label htmlFor="design-model">设计模型</label>
-            <select
-              id="design-model"
-              translate="no"
-              value={modelId}
-              onChange={(event) => setModelId(event.target.value)}
-            >
-              {providerModels.map((item) => <option value={item.model_id} key={item.gateway_id}>{item.display_name}</option>)}
-            </select>
+          <div className="design-engine-grid">
+            <ProviderSelector
+              className="design-provider-selector"
+              label="声音设计厂商"
+              value={provider}
+              onChange={chooseProvider}
+              options={designProviderIds.map((id) => ({
+                id,
+                label: providerMeta[id].label,
+                mark: providerMeta[id].mark,
+                tone: providerMeta[id].tone,
+                detail: `${designModels.filter((item) => item.provider === id).length} 个设计模型`,
+              }))}
+            />
+            <div className="design-model-field">
+              <label htmlFor="design-model">设计模型</label>
+              <select
+                id="design-model"
+                translate="no"
+                value={modelId}
+                onChange={(event) => setModelId(event.target.value)}
+              >
+                {providerModels.map((item) => <option value={item.model_id} key={item.gateway_id}>{item.display_name}</option>)}
+              </select>
+            </div>
           </div>
           <h3 className="design-section-title design-section-spaced">描述你想要的声音</h3>
           <div className="design-copy-grid">
             <div className="design-copy-field">
               <label htmlFor="design-prompt">声音描述</label>
               <div className="design-textarea-wrap">
-                <textarea id="design-prompt" className="design-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={promptLimit} />
-                <div className="design-count">{prompt.length} / {promptLimit.toLocaleString()}</div>
+                <textarea id="design-prompt" className="design-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} aria-invalid={promptInvalid} />
+                <div className={promptInvalid ? "design-count invalid" : "design-count"}>{prompt.length} / {promptLimit.toLocaleString()}</div>
               </div>
             </div>
             <div className="design-copy-field">
               <label htmlFor="design-preview-text">试听文本</label>
-              <textarea id="design-preview-text" className="design-preview-text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} maxLength={previewLimit} />
+              <div className="design-textarea-wrap">
+                <textarea id="design-preview-text" className="design-preview-text" value={previewText} onChange={(event) => setPreviewText(event.target.value)} aria-invalid={previewInvalid} />
+                <div className={previewInvalid ? "design-count invalid" : "design-count"}>{previewText.length} / {previewLimit.toLocaleString()}{previewMin > 1 ? `，至少 ${previewMin}` : ""}</div>
+              </div>
             </div>
           </div>
-          <div className="form-grid design-names"><div><label>显示名称</label><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></div><div><label>兼容别名</label><input value={publicName} onChange={(event) => setPublicName(event.target.value)} /></div></div>
-          <button className="primary-button design-submit" onClick={() => void submit()} disabled={working || !selected || !prompt.trim() || !previewText.trim() || !displayName.trim() || !publicName.trim()}><WandSparkles size={17} />{working ? "正在设计..." : "创建并试听音色"}</button>
+          <div className="design-action-grid">
+            <div className="form-grid design-names"><div><label>显示名称</label><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></div><div><label>兼容别名</label><input value={publicName} onChange={(event) => setPublicName(event.target.value)} /></div></div>
+            <button className="primary-button design-submit" onClick={() => void submit()} disabled={working || !selected || !prompt.trim() || !previewText.trim() || promptInvalid || previewInvalid || !displayName.trim() || !publicName.trim()}><WandSparkles size={17} />{working ? "正在设计..." : "创建并试听音色"}</button>
+          </div>
           {previewVoice && (
             <div className="design-preview-result" aria-live="polite">
               <div className="design-preview-icon"><Volume2 size={20} /></div>
@@ -1703,123 +1717,130 @@ function ClonePanel({
         description="上传参考音频，选择目标厂商和模型，创建一个可以在语音合成中复用的声音。"
       />
       <div className="clone-form">
-        <label
-          className={`upload-zone${isDragging ? " is-dragging" : ""}`}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setIsDragging(true);
-          }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            event.dataTransfer.dropEffect = "copy";
-            setIsDragging(true);
-          }}
-          onDragLeave={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setIsDragging(false);
-          }}
-          onDrop={handleDrop}
-        >
-          <input
-            type="file"
-            accept={
-              isVolcengineClone
-                ? ".wav,.mp3,.ogg,.m4a,.aac,.pcm,audio/*"
-                : ".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4"
-            }
-            onChange={(event) => acceptAudioFile(event.target.files?.[0])}
-          />
-          <FileAudio size={25} />
-          <strong>{fileName || "拖入参考音频，或点击选择"}</strong>
-          <span>
-            {isQwenClone
-              ? "WAV 16-bit / MP3 / M4A · 推荐 10–20 秒 · 不超过 10 MB"
-              : isVolcengineClone
-                ? "WAV / MP3 / OGG / M4A / AAC / PCM · 不超过 10 MB"
-                : isMiniMaxClone
-                  ? "WAV / MP3 / M4A · 10 秒至 5 分钟 · 不超过 20 MB"
-                : "WAV / MP3 / M4A · 建议 10–30 秒 · 不超过 20 MB"}
-          </span>
-          <span className="upload-link">
-            <Upload size={14} />
-            {fileName ? "重新选择" : "选择文件"}
-          </span>
-        </label>
-        <div className="form-grid">
-          <div>
-            <label>目标厂商</label>
-            <select
-              value={provider}
-              onChange={(event) => chooseProvider(event.target.value)}
+        <div className="clone-workspace-grid">
+          <label
+            className={`upload-zone${isDragging ? " is-dragging" : ""}`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setIsDragging(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.dataTransfer.dropEffect = "copy";
+              setIsDragging(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setIsDragging(false);
+            }}
+            onDrop={handleDrop}
+          >
+            <input
+              type="file"
+              accept={
+                isVolcengineClone
+                  ? ".wav,.mp3,.ogg,.m4a,.aac,.pcm,audio/*"
+                  : ".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4"
+              }
+              onChange={(event) => acceptAudioFile(event.target.files?.[0])}
+            />
+            <FileAudio size={25} />
+            <strong>{fileName || "拖入参考音频，或点击选择"}</strong>
+            <span>
+              {isQwenClone
+                ? "WAV 16-bit / MP3 / M4A · 推荐 10–20 秒 · 不超过 10 MB"
+                : isVolcengineClone
+                  ? "WAV / MP3 / OGG / M4A / AAC / PCM · 不超过 10 MB"
+                  : isMiniMaxClone
+                    ? "WAV / MP3 / M4A · 10 秒至 5 分钟 · 不超过 20 MB"
+                    : "WAV / MP3 / M4A · 建议 10–30 秒 · 不超过 20 MB"}
+            </span>
+            <span className="upload-link">
+              <Upload size={14} />
+              {fileName ? "重新选择" : "选择文件"}
+            </span>
+          </label>
+          <div className="clone-settings-panel">
+            <div className="clone-settings-fields">
+              <div className="clone-field">
+                <label htmlFor="clone-provider">目标厂商</label>
+                <select
+                  id="clone-provider"
+                  value={provider}
+                  onChange={(event) => chooseProvider(event.target.value)}
+                >
+                  {credentialProviderIds
+                    .filter((id) =>
+                      cloneModels.some((item) => item.provider === id),
+                    )
+                    .map((id) => (
+                      <option value={id} key={id}>
+                        {providerMeta[id].label}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div className="clone-field">
+                <label htmlFor="clone-model">目标模型</label>
+                <select
+                  id="clone-model"
+                  translate="no"
+                  value={modelId}
+                  onChange={(event) => setModelId(event.target.value)}
+                >
+                  {providerModels.map((item) => (
+                    <option value={item.model_id} key={item.gateway_id}>
+                      {item.display_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="clone-field">
+                <label htmlFor="clone-display-name">显示名称</label>
+                <input
+                  id="clone-display-name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                />
+              </div>
+              <div className="clone-field">
+                <label htmlFor="clone-public-name">兼容别名</label>
+                <input
+                  id="clone-public-name"
+                  value={publicName}
+                  onChange={(event) => setPublicName(event.target.value)}
+                />
+              </div>
+            </div>
+            <button
+              className="primary-button full"
+              onClick={submit}
+              disabled={
+                working ||
+                !selected ||
+                !selectedFile ||
+                !displayName.trim() ||
+                !publicName.trim()
+              }
             >
-              {credentialProviderIds
-                .filter((id) =>
-                  cloneModels.some((item) => item.provider === id),
-                )
-                .map((id) => (
-                  <option value={id} key={id}>
-                    {providerMeta[id].label}
-                  </option>
-                ))}
-            </select>
-          </div>
-          <div>
-            <label>目标模型</label>
-            <select
-              value={modelId}
-              onChange={(event) => setModelId(event.target.value)}
-            >
-              {providerModels.map((item) => (
-                <option value={item.model_id} key={item.gateway_id}>
-                  {item.display_name}
-                </option>
-              ))}
-            </select>
+              <Mic2 size={17} />
+              {working ? "处理中..." : "创建参考音色"}
+            </button>
+            <p className="form-footnote">
+              <Radio size={14} />
+              {isQwenClone
+                ? "创建时会上传样本并取得远端 Voice ID；后续合成只发送 Voice ID。"
+                : isVolcengineClone
+                  ? "创建时上传样本并取得远端音色 ID；首次正式合成可能触发厂商音色槽位计费。"
+                  : isMiniMaxClone
+                    ? "创建时上传样本并取得远端 Voice ID；7 天内未正式使用的音色可能被厂商删除。"
+                    : "该模型会在每次生成语音时向厂商发送本地参考音频。"}
+            </p>
           </div>
         </div>
-        <div className="form-grid">
-          <div>
-            <label>显示名称</label>
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
-          </div>
-          <div>
-            <label>兼容别名</label>
-            <input
-              value={publicName}
-              onChange={(event) => setPublicName(event.target.value)}
-            />
-          </div>
-        </div>
-        <button
-          className="primary-button full"
-          onClick={submit}
-          disabled={
-            working ||
-            !selected ||
-            !selectedFile ||
-            !displayName.trim() ||
-            !publicName.trim()
-          }
-        >
-          <Mic2 size={17} />
-          {working ? "处理中..." : "创建参考音色"}
-        </button>
-        <p className="form-footnote">
-          <Radio size={14} />
-          {isQwenClone
-            ? "创建时会上传样本并取得远端 Voice ID；后续合成只发送 Voice ID。"
-            : isVolcengineClone
-              ? "创建时上传样本并取得远端音色 ID；首次正式合成可能触发厂商音色槽位计费。"
-              : isMiniMaxClone
-                ? "创建时上传样本并取得远端 Voice ID；7 天内未正式使用的音色可能被厂商删除。"
-              : "该模型会在每次生成语音时向厂商发送本地参考音频。"}
-        </p>
       </div>
     </section>
   );

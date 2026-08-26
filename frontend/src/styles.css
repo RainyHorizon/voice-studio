@@ -375,7 +375,8 @@ h2 { color: var(--text); font-size: 24px; font-weight: 750; }
 .voice-wave span { background: var(--blue); }
 .type-text { color: #697484; }
 .status { color: #287d56; }
-.voice-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.voice-actions { display: grid; grid-template-columns: 76px 36px 36px; align-items: center; justify-content: end; gap: 8px; }
+.voice-action-placeholder { width: 36px; height: 36px; }
 .voice-use-button { min-width: 76px; height: 36px; border: 0; border-radius: 7px; color: #fff; background: #171a21; font-size: 11px; font-weight: 700; }
 .voice-use-button:hover { background: var(--blue-strong); }
 .delete-voice { color: #9ca2ab; }
@@ -1808,7 +1809,7 @@ body {
 }
 .voice-library .table-head,
 .voice-library .voice-row {
-  grid-template-columns: minmax(260px, 2fr) minmax(180px, 1.25fr) 80px 120px 86px 190px;
+  grid-template-columns: minmax(260px, 2fr) minmax(180px, 1.25fr) 80px 140px 190px;
 }
 
 @media (max-width: 1100px) {
@@ -1817,9 +1818,7 @@ body {
     grid-template-columns: minmax(220px, 1.6fr) minmax(160px, 1fr) 76px 180px;
   }
   .voice-library .table-head > :nth-child(4),
-  .voice-library .table-head > :nth-child(5),
-  .voice-library .voice-row > :nth-child(4),
-  .voice-library .voice-row > :nth-child(5) {
+  .voice-library .voice-row > :nth-child(4) {
     display: none;
   }
 }
@@ -1832,12 +1831,11 @@ body {
   }
   .voice-library .voice-row > :nth-child(2),
   .voice-library .voice-row > :nth-child(3),
-  .voice-library .voice-row > :nth-child(4),
-  .voice-library .voice-row > :nth-child(5) {
+  .voice-library .voice-row > :nth-child(4) {
     display: none;
   }
   .voice-library .voice-actions {
-    min-width: 174px;
+    min-width: 164px;
   }
 }
 
@@ -1847,7 +1845,7 @@ body {
   }
   .voice-library .voice-actions {
     min-width: 0;
-    justify-content: flex-start;
+    justify-content: start;
   }
 }
 
@@ -1861,70 +1859,94 @@ body {
   }
 }
 
-/* Voice clone workspace: use the full canvas and keep the primary controls easy to scan. */
+/* Voice clone uses the same left edge as the other workspaces and spends the right side on settings. */
 .clone-page {
   display: block;
-  min-height: calc(100vh - 185px);
+  min-height: 0;
 }
 .clone-form {
-  display: flex;
-  flex-direction: column;
   width: 100%;
   max-width: none;
   padding: 0;
   border: 0;
 }
-.clone-form .upload-zone {
+.clone-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 24vw, 430px);
+  align-items: stretch;
+  gap: clamp(36px, 4vw, 64px);
+}
+.clone-workspace-grid .upload-zone {
   width: 100%;
-  min-height: 300px;
+  min-height: 500px;
+  height: 100%;
   gap: 14px;
   border-radius: 10px;
 }
-.clone-form .upload-zone svg {
+.clone-workspace-grid .upload-zone svg {
   width: 32px;
   height: 32px;
 }
-.clone-form .upload-zone strong {
+.clone-workspace-grid .upload-zone strong {
   font-size: 18px;
   line-height: 1.4;
 }
-.clone-form .upload-zone span {
+.clone-workspace-grid .upload-zone span {
   font-size: 15px;
   line-height: 1.5;
 }
-.clone-form .upload-zone .upload-link {
+.clone-workspace-grid .upload-zone .upload-link {
   font-size: 16px;
 }
-.clone-form .form-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.clone-settings-panel {
+  min-width: 0;
+  padding-left: clamp(30px, 3vw, 50px);
+  border-left: 1px solid var(--line);
+}
+.clone-settings-fields {
+  display: grid;
   gap: 24px;
-  margin-top: 30px;
 }
-.clone-form .form-grid > div {
+.clone-field {
+  display: grid;
   gap: 10px;
+  min-width: 0;
 }
-.clone-form .form-grid label {
-  margin-top: 0;
+.clone-field label {
   color: #4c5664;
   font-size: 16px;
+  font-weight: 650;
   line-height: 1.4;
 }
-.clone-form .form-grid select,
-.clone-form .form-grid input {
+.clone-field select,
+.clone-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   min-height: 56px;
   height: 56px;
   padding: 0 16px;
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
+  outline: 0;
+  color: #303640;
+  background: #fff;
   font-size: 16px;
 }
+.clone-field select:focus,
+.clone-field input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(79,130,247,.1);
+}
 .clone-form .primary-button.full {
+  justify-content: center;
+  width: 100%;
   min-height: 56px;
   margin-top: 30px;
   border-radius: 8px;
   font-size: 17px;
 }
 .clone-form .form-footnote {
-  order: 3;
   margin: 28px 0 0;
   padding: 18px 0 0;
   border-top: 1px solid var(--line);
@@ -1933,17 +1955,34 @@ body {
   line-height: 1.75;
 }
 
+@media (max-width: 1100px) {
+  .clone-workspace-grid {
+    grid-template-columns: 1fr;
+    gap: 30px;
+  }
+  .clone-workspace-grid .upload-zone {
+    min-height: 280px;
+  }
+  .clone-settings-panel {
+    padding: 30px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .clone-settings-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 760px) {
   .clone-page { min-height: 0; }
-  .clone-form .upload-zone { min-height: 240px; }
-  .clone-form .form-grid {
+  .clone-workspace-grid .upload-zone { min-height: 240px; }
+  .clone-settings-fields {
     grid-template-columns: 1fr;
     gap: 18px;
-    margin-top: 22px;
   }
-  .clone-form .form-grid label { font-size: 15px; }
-  .clone-form .form-grid select,
-  .clone-form .form-grid input { min-height: 52px; height: 52px; font-size: 15px; }
+  .clone-field label { font-size: 15px; }
+  .clone-field select,
+  .clone-field input { min-height: 52px; height: 52px; font-size: 15px; }
   .clone-form .primary-button.full { min-height: 54px; margin-top: 24px; font-size: 16px; }
   .clone-form .form-footnote { font-size: 13px; }
 }
@@ -2034,11 +2073,10 @@ body {
   margin: 20px 4px 0;
 }
 
-/* Voice design stays sequential while related writing fields share the desktop canvas. */
+/* Voice design keeps the global left edge and uses one shared working grid for each step. */
 .design-page {
-  max-width: 1320px;
-  margin-right: auto;
-  margin-left: auto;
+  max-width: none;
+  margin: 0;
 }
 .design-page .design-layout {
   display: block;
@@ -2057,8 +2095,18 @@ body {
 .design-section-spaced {
   margin-top: 38px;
 }
+.design-engine-grid,
+.design-copy-grid,
+.design-action-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 24vw, 430px);
+  gap: clamp(32px, 4vw, 64px);
+}
+.design-engine-grid {
+  align-items: end;
+}
 .design-provider-selector {
-  margin-bottom: 28px;
+  margin: 0;
 }
 .design-model-field > label,
 .design-copy-field > label,
@@ -2092,10 +2140,7 @@ body {
   box-shadow: 0 0 0 3px rgba(79,130,247,.1);
 }
 .design-copy-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(340px, 1fr);
   align-items: stretch;
-  gap: 28px;
 }
 .design-copy-field,
 .design-textarea-wrap {
@@ -2134,15 +2179,27 @@ body {
   font-size: 13px;
   pointer-events: none;
 }
+.design-page .design-count.invalid {
+  color: #c2413b;
+  font-weight: 600;
+}
+.design-page textarea[aria-invalid="true"] {
+  border-color: #d76861;
+  box-shadow: 0 0 0 3px rgba(194, 65, 59, 0.08);
+}
 .design-page .design-names {
   gap: 24px;
-  margin-top: 16px;
+  margin: 0;
+}
+.design-action-grid {
+  align-items: end;
+  margin-top: 28px;
 }
 .design-page .design-submit {
   justify-content: center;
   width: 100%;
   min-height: 56px;
-  margin-top: 30px;
+  margin: 0;
   border-radius: 8px;
   font-size: 17px;
 }
@@ -2310,7 +2367,9 @@ body {
   .provider-choice-copy strong { font-size: 15px; }
   .provider-choice-copy small { font-size: 12px; }
   .design-section-title { font-size: 18px; }
-  .design-copy-grid { grid-template-columns: 1fr; gap: 22px; }
+  .design-engine-grid,
+  .design-copy-grid,
+  .design-action-grid { grid-template-columns: 1fr; gap: 22px; }
   .design-page .design-prompt,
   .design-page .design-preview-text { height: auto; min-height: 180px; }
   .design-page .design-names { grid-template-columns: 1fr; gap: 0; }
@@ -2321,8 +2380,10 @@ body {
   .gateway-overview-secondary > .gateway-quickstart-aside { grid-template-columns: 1fr; }
 }
 
-@media (max-width: 1040px) and (min-width: 761px) {
-  .design-copy-grid {
+@media (max-width: 1200px) and (min-width: 761px) {
+  .design-engine-grid,
+  .design-copy-grid,
+  .design-action-grid {
     grid-template-columns: 1fr;
     gap: 24px;
   }
@@ -2540,34 +2601,4 @@ body {
   .synthesis-settings-grid { grid-template-columns: 1fr; gap: 20px; }
   .synthesis-instruction-field { grid-column: auto; }
   .synthesis-voice-field { grid-column: auto; }
-}
-
-/* Keep clone responsive to the viewport; synthesis and design remain content-driven. */
-@media (min-width: 1001px) {
-  .clone-page {
-    min-height: calc(100dvh - 102px);
-  }
-
-  .clone-page > .workspace-hero {
-    margin-bottom: clamp(22px, 3dvh, 42px);
-  }
-
-  .clone-form .upload-zone {
-    min-height: 0;
-    height: clamp(210px, 29dvh, 320px);
-  }
-
-  .clone-form .form-grid {
-    margin-top: clamp(18px, 2.6dvh, 30px);
-  }
-
-  .clone-form .primary-button.full {
-    margin-top: clamp(20px, 2.6dvh, 30px);
-  }
-
-  .clone-form .form-footnote {
-    margin-top: clamp(18px, 2.5dvh, 28px);
-    padding-top: clamp(14px, 2dvh, 18px);
-  }
-
 }

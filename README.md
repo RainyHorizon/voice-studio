@@ -35,6 +35,7 @@ API Key、音频、任务历史和音色信息默认保存在本机，不会上�
 | 方式 | 推荐对象 | 需要安装 |
 | --- | --- | --- |
 | Windows 便携版 | 普通 Windows 用户 | 不需要 Python、Node.js 或 FFmpeg |
+| Windows 轻量版 | 已安装运行环境的 Windows 用户 | Python 3.11+、FFmpeg |
 | 源码启动 | Windows、macOS、Linux 开发者 | Python 3.11+、FFmpeg；首次构建前端需要 Node.js 20+ |
 | Docker Compose | 服务器或容器用户 | Docker Desktop 或 Docker Engine + Compose |
 
@@ -46,6 +47,12 @@ API Key、音频、任务历史和音色信息默认保存在本机，不会上�
 4. 浏览器打开启动器显示的地址，默认是 `http://127.0.0.1:8765`。
 
 便携版包含运行所需的 Python、后端依赖、前端文件、FFmpeg 和 FFprobe。数据库、音频和网关配置保存在程序目录的 `data` 文件夹中。升级时请保留这个文件夹。
+
+从首个包含自动更新器的版本开始，可先关闭 Voice Studio，再双击 `更新 Voice Studio.bat`。更新器会自动识别 Portable、Windows 轻量版或 Git 源码目录，并选择对应的安全更新方式。更早的便携版需要先手动升级一次。
+
+### Windows 轻量版
+
+在 Releases 下载 `Voice-Studio-*-Windows.zip` 并完整解压，安装 Python 3.11+ 和 FFmpeg 后，双击 `启动 Voice Studio.bat`。轻量版已包含预构建前端，通常不需要安装 Node.js。
 
 ### Windows 源码启动
 
@@ -82,7 +89,31 @@ chmod +x start.sh
 
 `start.sh` 会自动创建 `backend/.venv`、安装后端依赖，并在需要时构建前端。
 
-### Docker Compose
+## 更新
+
+| 当前安装方式 | 更新入口 | 更新来源 |
+| --- | --- | --- |
+| Windows Portable | 双击 `更新 Voice Studio.bat` | 最新正式版 Portable ZIP |
+| Windows 轻量版 | 双击 `更新 Voice Studio.bat` | 最新正式版 Windows ZIP |
+| Windows Git 源码 | 双击 `更新 Voice Studio.bat` | 当前分支的上游 Git 分支 |
+| Windows Source ZIP | 双击 `更新 Voice Studio.bat` | 最新正式版 Windows ZIP |
+| macOS / Linux Release 包 | `bash update.sh` | 对应系统的最新正式版 TAR 包 |
+| macOS / Linux Git 源码 | `bash update.sh` | 当前分支的上游 Git 分支 |
+| macOS / Linux Source ZIP | `bash update.sh` | 对应系统的最新正式版 TAR 包 |
+
+Release 包更新前会校验 GitHub 提供的 SHA256，只替换清单内的程序文件，并保留 `data`、系统凭据、虚拟环境和其他用户文件。没有 `.git` 的 GitHub Source ZIP 会在首次更新后转为对应系统的 Release 包维护。Git 更新只允许官方仓库、已配置上游且工作区完全干净的分支，并使用 `git pull --ff-only`；存在本地改动或分叉历史时会停止，不会覆盖代码。
+
+只检查更新：
+
+```powershell
+.\update.ps1 -CheckOnly
+```
+
+```bash
+bash update.sh --check
+```
+
+## Docker Compose
 
 Docker 使用环境变量读取厂商密钥，不访问宿主机的系统密钥环。
 
@@ -105,6 +136,15 @@ docker compose logs -f voice-studio
 ```bash
 docker compose down
 ```
+
+Docker 镜像不使用桌面更新脚本。更新 `.env` 中的 `VOICE_STUDIO_VERSION` 后执行：
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+```
+
+如果使用本地源码构建镜像，则先更新 Git 源码，再执行 `docker compose up -d --build`。`./data` 挂载目录和 `.env` 不会被镜像更新覆盖。
 
 首次使用本地源码构建镜像：
 
