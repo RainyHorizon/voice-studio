@@ -278,6 +278,11 @@ PCM 是不带文件头的原始音频数据，浏览器通常无法直接播放�
 
 浏览器或 OpenAI 客户端 → FastAPI 本地服务 → 厂商语音 API；前端不直接携带厂商 API Key。
 
+开发者文档：
+
+- [API 参考](docs/API.md)
+- [架构说明](docs/ARCHITECTURE.md)
+
 ## 开发与测试
 
 ```powershell

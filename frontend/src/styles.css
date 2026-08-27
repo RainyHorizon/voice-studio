@@ -165,8 +165,8 @@
 * { letter-spacing: 0 !important; }
 body { color: var(--text); background: var(--page); }
 button, input, textarea, select { color: inherit; }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-  outline: 3px solid rgba(79, 130, 247, .2);
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid #2457c5;
   outline-offset: 2px;
 }
 .app-shell {
@@ -2601,4 +2601,15 @@ body {
   .synthesis-settings-grid { grid-template-columns: 1fr; gap: 20px; }
   .synthesis-instruction-field { grid-column: auto; }
   .synthesis-voice-field { grid-column: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

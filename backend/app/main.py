@@ -99,7 +99,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.1.0"))
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.2.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
@@ -740,8 +740,7 @@ def summary():
         voices = connection.execute("SELECT COUNT(*) FROM voices WHERE status='active'").fetchone()[0]
         jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         successful = connection.execute("SELECT COUNT(*) FROM jobs WHERE status='completed'").fetchone()[0]
-    key = gateway_key()
-    return {"application": "voice-studio", "version": app.version, "voices": voices, "jobs": jobs, "successful_jobs": successful, "gateway": {"enabled": True, "base_url": "/v1", "key_prefix": key[:10]}}
+    return {"application": "voice-studio", "version": app.version, "voices": voices, "jobs": jobs, "successful_jobs": successful, "gateway": {"enabled": True, "base_url": "/v1"}}
 
 
 def _command_diagnostic(command: str, arguments: list[str], required: bool) -> dict[str, Any]:
@@ -1923,7 +1922,8 @@ def _job_rows_for_batch(body: JobBatchBody) -> list[sqlite3.Row]:
         if job_ids:
             placeholders = ",".join("?" for _ in job_ids)
             rows = connection.execute(
-                f"SELECT * FROM jobs WHERE id IN ({placeholders}) ORDER BY created_at DESC",
+                # The placeholder count is generated internally; every job ID remains bound.
+                f"SELECT * FROM jobs WHERE id IN ({placeholders}) ORDER BY created_at DESC",  # nosec B608
                 job_ids,
             ).fetchall()
         else:
@@ -2151,7 +2151,8 @@ def gateway_stats(window: str = "7d", provider: str = ""):
         params.append(provider)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with db() as connection:
-        rows = connection.execute(f"SELECT * FROM gateway_requests{where} ORDER BY created_at DESC", params).fetchall()
+        # WHERE fragments are fixed literals; user-controlled values remain bound parameters.
+        rows = connection.execute(f"SELECT * FROM gateway_requests{where} ORDER BY created_at DESC", params).fetchall()  # nosec B608
 
     def bucket(items: list[sqlite3.Row], key: str) -> list[dict[str, Any]]:
         grouped: dict[str, list[sqlite3.Row]] = {}

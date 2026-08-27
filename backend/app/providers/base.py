@@ -5,6 +5,12 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class ProviderModel:
+    """Describe one provider model exposed by the local gateway.
+
+    ``gateway_id`` is the stable ``provider/model`` identifier used by the
+    OpenAI-compatible API. ``operations`` declares optional clone/design
+    capabilities in addition to synthesis.
+    """
     provider: str
     model_id: str
     display_name: str
@@ -26,6 +32,7 @@ class ProviderModel:
 
 @dataclass(frozen=True)
 class SynthesisRequest:
+    """Normalized synthesis request passed from the gateway to an adapter."""
     model: str
     voice: str
     text: str
@@ -35,6 +42,7 @@ class SynthesisRequest:
 
 
 class SpeechProvider(Protocol):
+    """Minimal adapter contract implemented by each speech provider."""
     key: str
 
     def models(self) -> list[ProviderModel]: ...
@@ -43,6 +51,8 @@ class SpeechProvider(Protocol):
 
 
 class ProviderError(Exception):
+    """Provider failure normalized to a user-facing message and HTTP status."""
+
     def __init__(self, message: str, code: str = "provider_error", status: int = 502):
         super().__init__(message)
         self.code = code

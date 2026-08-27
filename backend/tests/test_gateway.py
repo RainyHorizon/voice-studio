@@ -204,6 +204,8 @@ class GatewayEndpointTests(unittest.TestCase):
             async def run():
                 transport = httpx.ASGITransport(app=main.app)
                 async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    summary = await client.get("/api/summary")
+                    self.assertNotIn("key_prefix", summary.json().get("gateway", {}))
                     config = await client.get("/api/gateway")
                     self.assertEqual(config.status_code, 200)
                     self.assertEqual(config.json()["key"], "test_gateway_key")

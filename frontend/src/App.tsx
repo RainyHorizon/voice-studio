@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
   AudioLines,
@@ -271,6 +277,88 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) throw new Error(await responseError(response));
   return response.json();
+}
+
+function useDialogAccessibility<T extends HTMLElement>(
+  open: boolean,
+  onClose: () => void,
+) {
+  const dialogRef = useRef<T>(null);
+  const onCloseRef = useRef(onClose);
+  const restoreRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    restoreRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusableSelector =
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusFirst = () => {
+      const preferred = dialog.querySelector<HTMLElement>("[autofocus]");
+      const first = dialog.querySelector<HTMLElement>(focusableSelector);
+      (preferred || first || dialog).focus();
+    };
+    const timer = window.requestAnimationFrame(focusFirst);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(focusableSelector),
+      );
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(timer);
+      document.removeEventListener("keydown", handleKeyDown);
+      if (restoreRef.current?.isConnected) restoreRef.current.focus();
+    };
+  }, [open]);
+
+  return dialogRef;
+}
+
+function handleTabListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  );
+  const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+  if (current < 0 || !tabs.length) return;
+  event.preventDefault();
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? tabs.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[next].focus();
+  tabs[next].click();
 }
 
 export default function App() {
@@ -549,10 +637,10 @@ export default function App() {
           <h1>{titleFor(active)}</h1>
         </header>
         {notice && (
-          <div className="notice">
+          <div className="notice" role="status" aria-live="polite" aria-atomic="true">
             <Activity size={15} />
             {notice}
-            <button onClick={() => setNotice("")}>
+            <button type="button" onClick={() => setNotice("")} title="关闭提示" aria-label="关闭提示">
               <X size={14} />
             </button>
           </div>
@@ -669,13 +757,12 @@ function ProviderSelector({
   className?: string;
 }) {
   return (
-    <div className={`provider-selector${className ? ` ${className}` : ""}`} role="tablist" aria-label={label}>
+    <div className={`provider-selector${className ? ` ${className}` : ""}`} role="group" aria-label={label}>
       {options.map((option) => (
         <button
           className={value === option.id ? "provider-choice selected" : "provider-choice"}
           type="button"
-          role="tab"
-          aria-selected={value === option.id}
+          aria-pressed={value === option.id}
           onClick={() => onChange(option.id)}
           key={option.id}
         >
@@ -925,9 +1012,9 @@ function VoiceLibrary({
           </button>
         </div>
       </div>
-      <div className="voice-scope-tabs" role="tablist" aria-label="音色范围">
-        <button className={scope === "all" ? "selected" : ""} onClick={() => setScope("all")}>全部音色</button>
-        <button className={scope === "mine" ? "selected" : ""} onClick={() => setScope("mine")}>我的音色</button>
+      <div className="voice-scope-tabs" role="group" aria-label="音色范围">
+        <button type="button" aria-pressed={scope === "all"} className={scope === "all" ? "selected" : ""} onClick={() => setScope("all")}>全部音色</button>
+        <button type="button" aria-pressed={scope === "mine"} className={scope === "mine" ? "selected" : ""} onClick={() => setScope("mine")}>我的音色</button>
       </div>
       <ProviderSelector
         className="voice-provider-selector"
@@ -1054,6 +1141,9 @@ function RenameVoiceDialog({
   const [displayName, setDisplayName] = useState(voice.display_name);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
+  const dialogRef = useDialogAccessibility<HTMLDivElement>(true, () => {
+    if (!working) onClose();
+  });
   const submit = async () => {
     const value = displayName.trim();
     if (!value || value === voice.display_name) return;
@@ -1069,7 +1159,7 @@ function RenameVoiceDialog({
   };
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !working) onClose(); }}>
-      <div className="voice-modal rename-voice-modal" role="dialog" aria-modal="true" aria-labelledby="rename-voice-title">
+      <div ref={dialogRef} className="voice-modal rename-voice-modal" role="dialog" aria-modal="true" aria-labelledby="rename-voice-title" tabIndex={-1}>
         <div className="modal-head">
           <div><h3 id="rename-voice-title">重命名音色</h3></div>
           <button className="icon-button" type="button" onClick={onClose} disabled={working} title="关闭" aria-label="关闭"><X size={18} /></button>
@@ -1079,7 +1169,7 @@ function RenameVoiceDialog({
           <input id="rename-voice-name" autoFocus maxLength={100} value={displayName} onChange={(event) => setDisplayName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submit(); }} />
           <div className="rename-api-id"><span>兼容别名</span><code>{voice.public_name}</code></div>
           <p className="modal-note"><ShieldCheck size={15} />重命名只改变界面中显示的名称，现有 API 调用、任务记录和厂商 Voice ID 不受影响。</p>
-          {message && <div className="form-message">{message}</div>}
+          {message && <div className="form-message" role="status" aria-live="polite">{message}</div>}
         </div>
         <div className="modal-actions">
           <button className="secondary-button" type="button" onClick={onClose} disabled={working}>取消</button>
@@ -1127,6 +1217,7 @@ function ImportVoiceDialog({
   const [edits, setEdits] = useState<
     Record<string, { display_name: string; public_name: string }>
   >({});
+  const dialogRef = useDialogAccessibility<HTMLDivElement>(true, onClose);
   const providerModels = importModels.filter(
     (item) => item.provider === provider,
   );
@@ -1245,34 +1336,36 @@ function ImportVoiceDialog({
       }}
     >
       <div
+        ref={dialogRef}
         className={"voice-modal " + (mode === "sync" ? "sync-modal" : "")}
         role="dialog"
         aria-modal="true"
         aria-labelledby="import-title"
+        tabIndex={-1}
       >
         <div className="modal-head">
           <div>
             <h3 id="import-title">导入已有厂商音色</h3>
           </div>
-          <button className="icon-button" title="关闭" onClick={onClose}>
+          <button className="icon-button" type="button" title="关闭" aria-label="关闭" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
         <div className="modal-form">
-          <div className="import-mode" role="tablist" aria-label="导入方式">
+          <div className="import-mode" role="group" aria-label="导入方式">
             <button
               className={mode === "sync" ? "selected" : ""}
               onClick={() => chooseMode("sync")}
-              role="tab"
-              aria-selected={mode === "sync"}
+              type="button"
+              aria-pressed={mode === "sync"}
             >
               云端同步
             </button>
             <button
               className={mode === "manual" ? "selected" : ""}
               onClick={() => chooseMode("manual")}
-              role="tab"
-              aria-selected={mode === "manual"}
+              type="button"
+              aria-pressed={mode === "manual"}
             >
               手工输入 ID
             </button>
@@ -1446,7 +1539,7 @@ function ImportVoiceDialog({
               )}
             </>
           )}
-          {message && <div className="form-message">{message}</div>}
+          {message && <div className="form-message" role="status" aria-live="polite">{message}</div>}
         </div>
         <div className="modal-actions">
           <button className="secondary-button" onClick={onClose}>
@@ -2242,14 +2335,14 @@ function GatewayPanel({
         </div>
       </section>
 
-      <div className="gateway-view-tabs" role="tablist" aria-label="网关页面">
-        <button role="tab" aria-selected={gatewayView === "docs"} className={gatewayView === "docs" ? "selected" : ""} onClick={() => setGatewayView("docs")}><Code2 size={16} />接入文档</button>
-        <button role="tab" aria-selected={gatewayView === "test"} className={gatewayView === "test" ? "selected" : ""} onClick={() => setGatewayView("test")}><FlaskConical size={16} />接口测试</button>
-        <button role="tab" aria-selected={gatewayView === "stats"} className={gatewayView === "stats" ? "selected" : ""} onClick={() => setGatewayView("stats")}><Gauge size={16} />运行统计</button>
+      <div className="gateway-view-tabs" role="tablist" aria-label="网关页面" onKeyDown={handleTabListKeyDown}>
+        <button id="gateway-tab-docs" type="button" role="tab" aria-controls="gateway-panel-docs" aria-selected={gatewayView === "docs"} tabIndex={gatewayView === "docs" ? 0 : -1} className={gatewayView === "docs" ? "selected" : ""} onClick={() => setGatewayView("docs")}><Code2 size={16} />接入文档</button>
+        <button id="gateway-tab-test" type="button" role="tab" aria-controls="gateway-panel-test" aria-selected={gatewayView === "test"} tabIndex={gatewayView === "test" ? 0 : -1} className={gatewayView === "test" ? "selected" : ""} onClick={() => setGatewayView("test")}><FlaskConical size={16} />接口测试</button>
+        <button id="gateway-tab-stats" type="button" role="tab" aria-controls="gateway-panel-stats" aria-selected={gatewayView === "stats"} tabIndex={gatewayView === "stats" ? 0 : -1} className={gatewayView === "stats" ? "selected" : ""} onClick={() => setGatewayView("stats")}><Gauge size={16} />运行统计</button>
       </div>
 
       {gatewayView === "docs" && (
-        <section className="gateway-docs" role="tabpanel">
+        <section id="gateway-panel-docs" className="gateway-docs" role="tabpanel" aria-labelledby="gateway-tab-docs" tabIndex={0}>
           <div className="gateway-docs-heading">
             <h3>OpenAI 兼容接口</h3>
             <span>{endpointDocs.length} 个端点</span>
@@ -2283,7 +2376,7 @@ function GatewayPanel({
         </section>
       )}
 
-      {gatewayView === "stats" && <section className="gateway-observability" role="tabpanel">
+      {gatewayView === "stats" && <section id="gateway-panel-stats" className="gateway-observability" role="tabpanel" aria-labelledby="gateway-tab-stats" tabIndex={0}>
         <div className="observability-head">
           <div>
             <h3>运行统计</h3>
@@ -2341,7 +2434,7 @@ function GatewayPanel({
           <div className="stats-empty"><Gauge size={18} /><span>当前范围还没有网关语音请求。完成一次接口测试后会开始显示统计。</span></div>
         )}
       </section>}
-      {gatewayView === "test" && <div className="gateway-testbench" role="tabpanel">
+      {gatewayView === "test" && <div id="gateway-panel-test" className="gateway-testbench" role="tabpanel" aria-labelledby="gateway-tab-test" tabIndex={0}>
         <div className="testbench-header">
           <div>
             <h3>接口测试台</h3>
@@ -2772,19 +2865,19 @@ function Settings({ models, onJobsChanged }: { models: Model[]; onJobsChanged: (
         accent="放进同一个工作台。"
         description="统一管理厂商凭据、生成文件存储策略和本机运行环境。"
       />
-      <div className="settings-navigation" role="tablist" aria-label="设置分类">
-        <button className={section === "providers" ? "selected" : ""} type="button" role="tab" aria-selected={section === "providers"} onClick={() => setSection("providers")}><KeyRound size={18} />厂商账号</button>
-        <button className={section === "storage" ? "selected" : ""} type="button" role="tab" aria-selected={section === "storage"} onClick={() => setSection("storage")}><HardDrive size={18} />存储与清理</button>
-        <button className={section === "environment" ? "selected" : ""} type="button" role="tab" aria-selected={section === "environment"} onClick={() => setSection("environment")}><ShieldCheck size={18} />运行环境</button>
+      <div className="settings-navigation" role="tablist" aria-label="设置分类" onKeyDown={handleTabListKeyDown}>
+        <button id="settings-tab-providers" className={section === "providers" ? "selected" : ""} type="button" role="tab" aria-controls="settings-panel-providers" aria-selected={section === "providers"} tabIndex={section === "providers" ? 0 : -1} onClick={() => setSection("providers")}><KeyRound size={18} />厂商账号</button>
+        <button id="settings-tab-storage" className={section === "storage" ? "selected" : ""} type="button" role="tab" aria-controls="settings-panel-storage" aria-selected={section === "storage"} tabIndex={section === "storage" ? 0 : -1} onClick={() => setSection("storage")}><HardDrive size={18} />存储与清理</button>
+        <button id="settings-tab-environment" className={section === "environment" ? "selected" : ""} type="button" role="tab" aria-controls="settings-panel-environment" aria-selected={section === "environment"} tabIndex={section === "environment" ? 0 : -1} onClick={() => setSection("environment")}><ShieldCheck size={18} />运行环境</button>
       </div>
-      {section === "providers" && <ProviderSettings models={models} />}
-      {section === "storage" && <StorageSettings onJobsChanged={onJobsChanged} />}
-      {section === "environment" && <EnvironmentSettings />}
+      {section === "providers" && <ProviderSettings models={models} panelId="settings-panel-providers" labelledBy="settings-tab-providers" />}
+      {section === "storage" && <StorageSettings onJobsChanged={onJobsChanged} panelId="settings-panel-storage" labelledBy="settings-tab-storage" />}
+      {section === "environment" && <EnvironmentSettings panelId="settings-panel-environment" labelledBy="settings-tab-environment" />}
     </section>
   );
 }
 
-function EnvironmentSettings() {
+function EnvironmentSettings({ panelId, labelledBy }: { panelId?: string; labelledBy?: string }) {
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -2806,7 +2899,7 @@ function EnvironmentSettings() {
     return <div className="environment-loading"><RefreshCw size={18} className="spinning" />正在检查运行环境...</div>;
   }
   return (
-    <div className="environment-settings-page">
+    <div id={panelId} className="environment-settings-page" role={panelId ? "tabpanel" : undefined} aria-labelledby={labelledBy} tabIndex={panelId ? 0 : undefined}>
       <div className="environment-heading">
         <div>
           <h2>运行环境</h2>
@@ -2863,12 +2956,16 @@ function storageDraft(policy: StoragePolicy): StoragePolicyDraft {
   };
 }
 
-function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void> }) {
+function StorageSettings({ onJobsChanged, panelId, labelledBy }: { onJobsChanged: () => Promise<void>; panelId?: string; labelledBy?: string }) {
   const [status, setStatus] = useState<StorageStatus | null>(null);
   const [draft, setDraft] = useState<StoragePolicyDraft | null>(null);
   const [preview, setPreview] = useState<CleanupPreview | null>(null);
   const [working, setWorking] = useState<"" | "loading" | "saving" | "preview" | "cleanup" | "directory">("loading");
   const [message, setMessage] = useState("");
+  const closePreview = () => {
+    if (working !== "cleanup") setPreview(null);
+  };
+  const dialogRef = useDialogAccessibility<HTMLDivElement>(Boolean(preview), closePreview);
 
   const load = async () => {
     setWorking("loading");
@@ -2976,7 +3073,7 @@ function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void>
   const usagePercent = Math.min(100, Math.max(0, status.usage.capacity_ratio * 100));
   const latest = status.cleanup_history[0];
   return (
-    <div className="storage-settings-page">
+    <div id={panelId} className="storage-settings-page" role={panelId ? "tabpanel" : undefined} aria-labelledby={labelledBy} tabIndex={panelId ? 0 : undefined}>
       <header className="storage-heading">
         <div><h2>生成文件存储</h2><p>控制任务音频的保留时间和磁盘占用。音色库、API 凭据与语音克隆素材不会被自动清理。</p></div>
         <button className="secondary-button" type="button" onClick={() => void openDirectory()} disabled={Boolean(working)}><FolderOpen size={17} />打开目录</button>
@@ -3026,7 +3123,7 @@ function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void>
       </section>
 
       {draft.cleanup_scope === "jobs" && <div className="storage-danger-note"><ShieldCheck size={18} /><span>当前策略会永久删除任务记录。建议先使用批量导出备份重要内容。</span></div>}
-      {message && <div className="form-message storage-message"><Activity size={15} />{message}</div>}
+      {message && <div className="form-message storage-message" role="status" aria-live="polite"><Activity size={15} />{message}</div>}
 
       <div className="storage-actions">
         <div>{latest ? <>最近清理：{new Date(latest.completed_at).toLocaleString()} · 释放 {formatBytes(latest.bytes_freed)}</> : "尚未执行过清理"}</div>
@@ -3039,12 +3136,12 @@ function StorageSettings({ onJobsChanged }: { onJobsChanged: () => Promise<void>
         {status.cleanup_history.length ? <div className="cleanup-history-list">{status.cleanup_history.map((run) => <div className="cleanup-history-row" key={run.id}><span>{new Date(run.completed_at).toLocaleString()}</span><strong>{run.trigger === "automatic" ? "自动清理" : "手动清理"}</strong><span>{run.files_removed} 个音频</span><span>{formatBytes(run.bytes_freed)}</span><span className={run.status === "completed" ? "cleanup-success" : "cleanup-partial"}>{run.status === "completed" ? "完成" : "部分失败"}</span></div>)}</div> : <div className="cleanup-history-empty">清理执行后，结果会记录在这里。</div>}
       </section>
 
-      {preview && <div className="storage-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && working !== "cleanup") setPreview(null); }}><div className="storage-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-confirm-title"><div className="storage-confirm-icon"><Trash2 size={22} /></div><h3 id="cleanup-confirm-title">确认本次清理</h3><div className="storage-preview-metrics"><div><span>音频文件</span><strong>{preview.file_count} 个</strong></div><div><span>预计释放</span><strong>{formatBytes(preview.bytes_to_free)}</strong></div><div><span>{preview.cleanup_scope === "jobs" ? "删除记录" : "保留记录"}</span><strong>{preview.cleanup_scope === "jobs" ? `${preview.job_count} 条` : `${preview.jobs_preserved} 条`}</strong></div></div><p>{preview.file_count || preview.job_count ? (preview.cleanup_scope === "jobs" ? "音频和对应任务记录将永久删除，此操作无法撤销。" : "音频清理后无法恢复，文字记录和生成参数会继续保留。") : "当前没有符合存储策略的文件。"}</p><div className="storage-confirm-actions"><button className="secondary-button" type="button" onClick={() => setPreview(null)} disabled={working === "cleanup"}>取消</button><button className={preview.cleanup_scope === "jobs" ? "danger-button" : "primary-button compact"} type="button" onClick={() => void cleanNow()} disabled={working === "cleanup" || (!preview.file_count && !preview.job_count)}>{working === "cleanup" ? "正在清理..." : "确认清理"}</button></div></div></div>}
+      {preview && <div className="storage-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) closePreview(); }}><div ref={dialogRef} className="storage-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-confirm-title" tabIndex={-1}><div className="storage-confirm-icon"><Trash2 size={22} /></div><h3 id="cleanup-confirm-title">确认本次清理</h3><div className="storage-preview-metrics"><div><span>音频文件</span><strong>{preview.file_count} 个</strong></div><div><span>预计释放</span><strong>{formatBytes(preview.bytes_to_free)}</strong></div><div><span>{preview.cleanup_scope === "jobs" ? "删除记录" : "保留记录"}</span><strong>{preview.cleanup_scope === "jobs" ? `${preview.job_count} 条` : `${preview.jobs_preserved} 条`}</strong></div></div><p>{preview.file_count || preview.job_count ? (preview.cleanup_scope === "jobs" ? "音频和对应任务记录将永久删除，此操作无法撤销。" : "音频清理后无法恢复，文字记录和生成参数会继续保留。") : "当前没有符合存储策略的文件。"}</p><div className="storage-confirm-actions"><button className="secondary-button" type="button" onClick={closePreview} disabled={working === "cleanup"}>取消</button><button className={preview.cleanup_scope === "jobs" ? "danger-button" : "primary-button compact"} type="button" onClick={() => void cleanNow()} disabled={working === "cleanup" || (!preview.file_count && !preview.job_count)}>{working === "cleanup" ? "正在清理..." : "确认清理"}</button></div></div></div>}
     </div>
   );
 }
 
-function ProviderSettings({ models }: { models: Model[] }) {
+function ProviderSettings({ models, panelId, labelledBy }: { models: Model[]; panelId?: string; labelledBy?: string }) {
   const [specs, setSpecs] = useState<Record<string, ProviderSpec>>({});
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [provider, setProvider] = useState("dashscope");
@@ -3174,7 +3271,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
   const current = accounts.find((item) => item.id === editingId);
 
   return (
-    <div className="settings-page">
+    <div id={panelId} className="settings-page" role={panelId ? "tabpanel" : undefined} aria-labelledby={labelledBy} tabIndex={panelId ? 0 : undefined}>
       <div>
         <h2>厂商账号与 API 凭据</h2>
         <p className="settings-lead">
@@ -3350,7 +3447,7 @@ function ProviderSettings({ models }: { models: Model[] }) {
               </span>
             </div>
           )}
-          {message && <div className="form-message">{message}</div>}
+          {message && <div className="form-message" role="status" aria-live="polite">{message}</div>}
           <div className="credential-actions">
             {editingId && (
               <button
