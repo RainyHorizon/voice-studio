@@ -1669,6 +1669,43 @@ body {
 .voice-library .voice-row strong {
   font-size: 16px;
 }
+.voice-speaker-id {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+  color: #8a939f;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.voice-speaker-id code {
+  max-width: 190px;
+  overflow: hidden;
+  color: #7b8796;
+  font: 12px "DM Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-speaker-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #7b8796;
+  background: transparent;
+  cursor: pointer;
+}
+.voice-speaker-copy:hover,
+.voice-speaker-copy:focus-visible {
+  border-color: #d8e2f4;
+  color: var(--blue-strong);
+  background: #f5f8ff;
+  outline: none;
+}
 .voice-library .voice-row small,
 .voice-library .status {
   font-size: 13px;
@@ -2896,4 +2933,161 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Typography and rhythm experiment: one shared scale for every workspace. */
+:root {
+  --font-ui: 'Manrope', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --fs-body: 15px;
+  --fs-label: 15px;
+  --fs-control: 15px;
+  --fs-meta: 13px;
+  --fs-section: 22px;
+  --space-field: 20px;
+  --space-section: 32px;
+  --space-page: 40px;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+}
+
+.main-area {
+  padding: var(--space-page) 48px 64px;
+}
+
+.topbar { margin-bottom: 34px; }
+.workspace-hero { margin-bottom: var(--space-section); }
+.workspace-hero h2 {
+  font-size: clamp(38px, 3.2vw, 46px);
+  line-height: 1.16;
+  font-weight: 800;
+}
+.workspace-hero p {
+  margin-top: 16px;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.section-heading h2,
+.design-section-title,
+.gateway-docs-heading h3,
+.control-history-head h3 {
+  font-size: var(--fs-section);
+  line-height: 1.3;
+  font-weight: 700;
+}
+
+.page-description,
+.gateway-header p,
+.settings-lead,
+.design-hero p,
+.clone-intro p {
+  font-size: var(--fs-body);
+  line-height: 1.75;
+}
+
+.control-section label,
+.form-grid label,
+.modal-form label,
+.field label,
+.design-form > label,
+.design-names label,
+.test-field,
+.test-field-row label,
+.synthesis-settings-grid > label,
+.synthesis-model-field > label,
+.synthesis-voice-field > label,
+.synthesis-speed-setting label,
+.synthesis-format-setting > label {
+  font-size: var(--fs-label);
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.control-section select,
+.control-section input:not([type=range]),
+.form-grid select,
+.form-grid input,
+.modal-form input,
+.modal-form select,
+.field input,
+.design-form > select,
+.design-form > input,
+.design-names input,
+.test-field select,
+.test-field textarea,
+.observability-controls select,
+.synthesis-settings-grid select,
+.synthesis-settings-grid input:not([type=range]) {
+  min-height: 46px;
+  font-size: var(--fs-control);
+}
+
+.ghost-button,
+.secondary-button,
+.primary-button,
+.danger-button,
+.voice-use-button {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.control-note,
+.form-footnote,
+.modal-note,
+.security-note,
+.field > small,
+.import-naming-note {
+  font-size: var(--fs-meta);
+  line-height: 1.65;
+}
+
+/* The library is information-dense, so its primary values get a clear visual lead. */
+.table-head,
+.voice-row {
+  grid-template-columns: minmax(260px, 2fr) minmax(180px, 1.25fr) 80px 120px 86px 154px;
+}
+.table-head {
+  min-height: 46px;
+  padding: 0 16px;
+  color: #687280;
+  font-size: 13px;
+  font-weight: 600;
+}
+.voice-row {
+  min-height: 96px;
+  padding: 22px 16px;
+  font-size: 15px;
+}
+.voice-row strong { font-size: 16px; font-weight: 650; }
+.voice-row small,
+.status { font-size: 13px; }
+.voice-filters button,
+.voice-scope-tabs button { font-size: 14px; }
+.voice-filters button > span:last-child { font-size: 13px; }
+.voice-actions { gap: 10px; }
+
+.history-main strong { font-size: 16px; font-weight: 650; }
+.history-main span,
+.history-record,
+.history-message { font-size: 13px; }
+
+.gateway-endpoint-trigger code,
+.gateway-endpoint-summary { font-size: 14px; }
+.gateway-endpoint-details p { font-size: 14px; line-height: 1.7; }
+.gateway-doc-code pre { font-size: 13px; line-height: 1.8; }
+
+@media (max-width: 1180px) {
+  .main-area { padding-left: 36px; padding-right: 36px; }
+}
+
+@media (max-width: 760px) {
+  .main-area { padding: 28px 20px 48px; }
+  .workspace-hero h2 { font-size: 34px; }
+  .workspace-hero p { font-size: 15px; }
+  .voice-row { min-height: 88px; padding: 18px 8px; }
 }

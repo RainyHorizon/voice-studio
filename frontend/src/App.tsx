@@ -61,6 +61,7 @@ type Voice = {
   design_prompt?: string;
   provider_account_id?: string | null;
   provider_project_name?: string | null;
+  provider_voice_id?: string | null;
 };
 type Model = {
   provider: string;
@@ -1019,6 +1020,18 @@ function VoiceLibrary({
   const [scope, setScope] = useState<"all" | "mine">("all");
   const [showImport, setShowImport] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Voice | null>(null);
+  const [copiedSpeakerId, setCopiedSpeakerId] = useState("");
+  const copySpeakerId = async (voice: Voice) => {
+    const speakerId = voice.provider_voice_id?.trim();
+    if (!speakerId) return;
+    try {
+      await navigator.clipboard.writeText(speakerId);
+      setCopiedSpeakerId(voice.id);
+      window.setTimeout(() => setCopiedSpeakerId(""), 1600);
+    } catch {
+      setCopiedSpeakerId("");
+    }
+  };
   const scoped = scope === "mine"
     ? voices.filter((item) => ["cloned", "design", "imported"].includes(item.voice_type))
     : voices;
@@ -1096,6 +1109,21 @@ function VoiceLibrary({
                 </div>
                 <div>
                   <strong>{item.display_name}</strong>
+                  {item.provider === "volcengine" && item.voice_type !== "preset" && item.provider_voice_id && (
+                    <span className="voice-speaker-id">
+                      <span>Speaker ID</span>
+                      <code title={item.provider_voice_id}>{item.provider_voice_id}</code>
+                      <button
+                        className="voice-speaker-copy"
+                        type="button"
+                        title={copiedSpeakerId === item.id ? "已复制 Speaker ID" : "复制 Speaker ID"}
+                        aria-label={`${copiedSpeakerId === item.id ? "已复制" : "复制"} ${item.provider_voice_id}`}
+                        onClick={() => void copySpeakerId(item)}
+                      >
+                        {copiedSpeakerId === item.id ? <Check size={13} /> : <Copy size={13} />}
+                      </button>
+                    </span>
+                  )}
                 </div>
               </div>
               <div>

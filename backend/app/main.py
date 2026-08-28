@@ -113,7 +113,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.3.0"))
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.4.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
