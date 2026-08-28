@@ -104,6 +104,9 @@ curl.exe -N "http://127.0.0.1:8765/v1/audio/speech/stream" \
 | 路径 | 用途 |
 | --- | --- |
 | `/api/provider-accounts` | 管理厂商账号元数据 |
+| `/api/provider-accounts/{account_id}/projects` | 查看、添加或删除火山引擎项目；同一账号可管理多个项目 |
+| `/api/provider-accounts/{account_id}/projects/sync` | 使用火山 IAM AK/SK 同步项目列表，并读取各项目已有的语音 API Key；只返回密钥名称、脱敏提示和状态 |
+| `/api/provider-accounts/{account_id}/volcengine-slots` | 按指定项目查询可用声音槽位 |
 | `/api/models`、`/api/voices` | 读取模型和音色库 |
 | `/api/voices/clone`、`/api/voices/design` | 创建克隆或设计音色 |
 | `/api/jobs` | 查询、下载、导出和删除任务 |

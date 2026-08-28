@@ -59,6 +59,8 @@ type Voice = {
   languages: string[];
   preview_url?: string | null;
   design_prompt?: string;
+  provider_account_id?: string | null;
+  provider_project_name?: string | null;
 };
 type Model = {
   provider: string;
@@ -79,6 +81,10 @@ type CloneConfig = {
   model_id: string;
   display_name: string;
   public_name: string;
+  speaker_id?: string;
+  provider_account_id?: string;
+  provider_project_name?: string;
+  clone_language?: number;
 };
 type DesignConfig = {
   provider: string;
@@ -102,6 +108,18 @@ type CloudVoice = {
   compatible: boolean;
   compatibility_message: string;
   imported: boolean;
+  provider_account_id?: string;
+  provider_project_name?: string;
+};
+type VolcengineSlot = {
+  speaker_id: string;
+  state: string;
+  alias: string;
+  available_training_times: number | null;
+  expire_time?: string | number;
+  is_activatable?: boolean | null;
+  instance_no?: string;
+  version?: string;
 };
 type Job = {
   id: string;
@@ -218,6 +236,24 @@ type ProviderAccount = {
   project_name?: string;
   openapi_access_key_hint?: string;
   has_openapi_secret?: boolean;
+  project_count?: number;
+};
+type ProviderProject = {
+  id: string;
+  provider_account_id: string;
+  project_name: string;
+  display_name: string;
+  status: string;
+  has_permission?: boolean | null;
+  source: string;
+  last_synced_at?: string | null;
+  has_api_key?: boolean | null;
+  api_key_status?: "available" | "missing" | "unknown" | "error";
+  api_key_name?: string | null;
+  api_key_hint?: string | null;
+  api_key_count?: number;
+  api_key_last_synced_at?: string | null;
+  api_key_sync_error?: string | null;
 };
 type ProviderSpec = {
   display_name: string;
@@ -530,6 +566,13 @@ export default function App() {
       display_name: config.display_name,
       public_name: config.public_name,
     });
+    if (config.speaker_id) query.set("speaker_id", config.speaker_id);
+    if (config.provider_account_id)
+      query.set("provider_account_id", config.provider_account_id);
+    if (config.provider_project_name)
+      query.set("provider_project_name", config.provider_project_name);
+    if (config.clone_language !== undefined)
+      query.set("clone_language", String(config.clone_language));
     const form = new FormData();
     form.append("audio", file);
     try {
@@ -1214,6 +1257,10 @@ function ImportVoiceDialog({
   const [message, setMessage] = useState("");
   const [cloudVoices, setCloudVoices] = useState<CloudVoice[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [providerAccounts, setProviderAccounts] = useState<ProviderAccount[]>([]);
+  const [providerAccountId, setProviderAccountId] = useState("");
+  const [providerProjects, setProviderProjects] = useState<ProviderProject[]>([]);
+  const [providerProjectName, setProviderProjectName] = useState("");
   const [edits, setEdits] = useState<
     Record<string, { display_name: string; public_name: string }>
   >({});
@@ -1221,6 +1268,42 @@ function ImportVoiceDialog({
   const providerModels = importModels.filter(
     (item) => item.provider === provider,
   );
+  const volcengineAccounts = providerAccounts.filter(
+    (item) => item.provider === "volcengine",
+  );
+
+  useEffect(() => {
+    api<ProviderAccount[]>("/api/provider-accounts")
+      .then(setProviderAccounts)
+      .catch(() => setProviderAccounts([]));
+  }, []);
+
+  useEffect(() => {
+    if (provider !== "volcengine") return;
+    setProviderAccountId((current) =>
+      volcengineAccounts.some((item) => item.id === current)
+        ? current
+        : volcengineAccounts[0]?.id || "",
+    );
+  }, [provider, providerAccounts]);
+  useEffect(() => {
+    if (provider !== "volcengine" || !providerAccountId) return;
+    api<{ projects: ProviderProject[] }>(
+      `/api/provider-accounts/${encodeURIComponent(providerAccountId)}/projects`,
+    )
+      .then((result) => {
+        setProviderProjects(result.projects);
+        setProviderProjectName((current) =>
+          result.projects.some((item) => item.project_name === current)
+            ? current
+            : result.projects[0]?.project_name || "",
+        );
+      })
+      .catch(() => {
+        setProviderProjects([]);
+        setProviderProjectName("");
+      });
+  }, [provider, providerAccountId]);
   const defaultNames = (item: CloudVoice, index: number) => {
     const providerName = providerMeta[item.provider || provider]?.label || item.provider || provider;
     const displayName = item.display_name?.trim() || `${providerName}复刻音色 ${String(index + 1).padStart(2, "0")}`;
@@ -1239,6 +1322,7 @@ function ImportVoiceDialog({
     setSelected([]);
     setEdits({});
     setMessage("");
+    if (next !== "volcengine") setProviderAccountId("");
   };
   const chooseMode = (next: "sync" | "manual") => {
     setMode(next);
@@ -1248,11 +1332,19 @@ function ImportVoiceDialog({
   };
   const loadCloudVoices = async () => {
     if (!syncProviders.includes(provider)) return;
+    if (provider === "volcengine" && !providerAccountId) {
+      setMessage("请先在设置中保存火山引擎项目配置。");
+      return;
+    }
     setWorking(true);
     setMessage("");
     try {
       const result = await api<{ voices: CloudVoice[] }>(
-        `/api/voices/cloud/${provider}`,
+        `/api/voices/cloud/${provider}${
+          provider === "volcengine"
+            ? `?provider_account_id=${encodeURIComponent(providerAccountId)}&provider_project_name=${encodeURIComponent(providerProjectName)}`
+            : ""
+        }`,
       );
       setCloudVoices(result.voices);
       setSelected([]);
@@ -1281,6 +1373,10 @@ function ImportVoiceDialog({
       !modelId
     )
       return;
+    if (provider === "volcengine" && !providerAccountId) {
+      setMessage("请先选择火山引擎项目。");
+      return;
+    }
     setWorking(true);
     setMessage("");
     try {
@@ -1291,6 +1387,8 @@ function ImportVoiceDialog({
         display_name: displayName.trim(),
         public_name: publicName.trim(),
         languages: ["zh-CN"],
+          provider_account_id: provider === "volcengine" ? providerAccountId : undefined,
+          provider_project_name: provider === "volcengine" ? providerProjectName : undefined,
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导入失败");
@@ -1310,6 +1408,8 @@ function ImportVoiceDialog({
       display_name: edits[item.provider_voice_id]?.display_name.trim() || item.display_name,
       public_name: edits[item.provider_voice_id]?.public_name.trim() || "",
       languages: [item.language === "zh" ? "zh-CN" : item.language || "zh-CN"],
+      provider_account_id: item.provider_account_id,
+      provider_project_name: item.provider_project_name,
     }));
     if (configs.some((item) => !item.display_name || !item.public_name)) {
       setMessage("已选择音色的显示名称和兼容别名不能为空。");
@@ -1403,6 +1503,52 @@ function ImportVoiceDialog({
               </select>
             </div>
           </div>
+          {provider === "volcengine" && (
+            <div className="import-project-field">
+              <label htmlFor="import-volcengine-account">火山账号</label>
+              <select
+                id="import-volcengine-account"
+                value={providerAccountId}
+                onChange={(event) => {
+                  setProviderAccountId(event.target.value);
+                  setProviderProjectName("");
+                  setCloudVoices([]);
+                  setSelected([]);
+                  setEdits({});
+                  setMessage("");
+                }}
+                disabled={!volcengineAccounts.length}
+              >
+                {!volcengineAccounts.length && <option value="">尚未配置项目</option>}
+                {volcengineAccounts.map((account) => (
+                  <option value={account.id} key={account.id}>
+                    {account.display_name}
+                  </option>
+                ))}
+              </select>
+              <label htmlFor="import-volcengine-project">项目</label>
+              <select
+                id="import-volcengine-project"
+                value={providerProjectName}
+                onChange={(event) => {
+                  setProviderProjectName(event.target.value);
+                  setCloudVoices([]);
+                  setSelected([]);
+                  setEdits({});
+                  setMessage("");
+                }}
+                disabled={!providerProjects.length}
+              >
+                {!providerProjects.length && <option value="">请先同步项目</option>}
+                {providerProjects.map((project) => (
+                  <option value={project.project_name} key={project.id}>
+                    {project.display_name || project.project_name}
+                    {project.display_name !== project.project_name ? ` · ${project.project_name}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {mode === "sync" ? (
             <>
               <div className="sync-toolbar">
@@ -1413,7 +1559,7 @@ function ImportVoiceDialog({
                 <button
                   className="secondary-button"
                   onClick={loadCloudVoices}
-                  disabled={working}
+                  disabled={working || (provider === "volcengine" && (!providerAccountId || !providerProjectName))}
                 >
                   <RefreshCw size={14} className={working ? "spinning" : ""} />
                   {working ? "正在读取" : "读取云端音色"}
@@ -1550,6 +1696,7 @@ function ImportVoiceDialog({
             onClick={mode === "sync" ? submitBatch : submit}
             disabled={
               working ||
+              (provider === "volcengine" && (!providerAccountId || !providerProjectName)) ||
               (mode === "sync"
                 ? selected.length === 0
                 : !voiceId.trim() || !displayName.trim() || !publicName.trim())
@@ -1731,6 +1878,17 @@ function ClonePanel({
   const [publicName, setPublicName] = useState(
     "clone-" + Date.now().toString().slice(-6),
   );
+  const [speakerId, setSpeakerId] = useState("");
+  const [volcengineAccounts, setVolcengineAccounts] = useState<ProviderAccount[]>([]);
+  const [providerAccountId, setProviderAccountId] = useState("");
+  const [volcengineProjects, setVolcengineProjects] = useState<ProviderProject[]>([]);
+  const [providerProjectName, setProviderProjectName] = useState("");
+  const [cloneLanguage, setCloneLanguage] = useState(0);
+  const [voiceSlots, setVoiceSlots] = useState<VolcengineSlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotMode, setSlotMode] = useState<"auto" | "manual">("auto");
+  const [slotMessage, setSlotMessage] = useState("");
+  const slotRequestRef = useRef(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState("");
   const [isDragging, setIsDragging] = useState(false);
@@ -1754,7 +1912,104 @@ function ClonePanel({
     }
   }, [cloneModels, providerModels, selected]);
 
+  useEffect(() => {
+    if (!isVolcengineClone) return;
+    let cancelled = false;
+    api<ProviderAccount[]>("/api/provider-accounts")
+      .then((items) => {
+        if (cancelled) return;
+        const accounts = items.filter(
+          (item) => item.provider === "volcengine",
+        );
+        setVolcengineAccounts(accounts);
+        setProviderAccountId((current) =>
+          accounts.some((item) => item.id === current) ? current : accounts[0]?.id || "",
+        );
+        if (!accounts.length) {
+          setVoiceSlots([]);
+          setSpeakerId("");
+          setSlotMessage("请先在设置中保存火山引擎 API 凭据并同步项目。");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSlotMessage("无法读取火山引擎项目配置。");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isVolcengineClone]);
+
+  useEffect(() => {
+    if (!isVolcengineClone || !providerAccountId) return;
+    let cancelled = false;
+    api<{ projects: ProviderProject[] }>(
+      `/api/provider-accounts/${encodeURIComponent(providerAccountId)}/projects`,
+    )
+      .then((result) => {
+        if (cancelled) return;
+        setVolcengineProjects(result.projects);
+        setProviderProjectName((current) =>
+          result.projects.some((item) => item.project_name === current)
+            ? current
+            : result.projects[0]?.project_name || "",
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVolcengineProjects([]);
+          setProviderProjectName("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isVolcengineClone, providerAccountId]);
+
+  const loadVoiceSlots = async (accountId: string) => {
+    if (!accountId || slotMode === "manual") return;
+    const requestId = ++slotRequestRef.current;
+    setSlotsLoading(true);
+    setSlotMessage("");
+    try {
+      const result = await api<{ slots: VolcengineSlot[] }>(
+        `/api/provider-accounts/${encodeURIComponent(accountId)}/volcengine-slots?project_name=${encodeURIComponent(providerProjectName)}`,
+      );
+      if (requestId !== slotRequestRef.current) return;
+      setVoiceSlots(result.slots);
+      setSpeakerId((current) =>
+        result.slots.some((item) => item.speaker_id === current)
+          ? current
+          : result.slots[0]?.speaker_id || "",
+      );
+      setSlotMessage(
+        result.slots.length
+          ? result.slots.length === 1
+            ? "已自动选择当前项目唯一的空槽位。"
+            : `找到 ${result.slots.length} 个空槽位，已选择第一个。`
+          : "当前项目没有可用空槽位，可切换项目或改为手动填写。",
+      );
+    } catch (error) {
+      if (requestId !== slotRequestRef.current) return;
+      setVoiceSlots([]);
+      setSpeakerId("");
+      setSlotMessage(error instanceof Error ? error.message : "空槽位查询失败");
+    } finally {
+      if (requestId === slotRequestRef.current) setSlotsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isVolcengineClone || !providerAccountId || !providerProjectName || slotMode !== "auto") return;
+    void loadVoiceSlots(providerAccountId);
+    // Project and mode changes are the only automatic refresh triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVolcengineClone, providerAccountId, providerProjectName, slotMode]);
+
   const chooseProvider = (nextProvider: string) => {
+    if (nextProvider !== "volcengine") {
+      slotRequestRef.current += 1;
+      setSlotsLoading(false);
+    }
     setProvider(nextProvider);
     const first = cloneModels.find((item) => item.provider === nextProvider);
     if (first) setModelId(first.model_id);
@@ -1782,6 +2037,15 @@ function ClonePanel({
     acceptAudioFile(event.dataTransfer.files?.[0]);
   };
   const submit = async () => {
+    const normalizedSpeakerId = speakerId.trim();
+    if (isVolcengineClone && !providerAccountId) {
+      onNotice("请先选择火山引擎项目");
+      return;
+    }
+    if (isVolcengineClone && !/^S_.+/.test(normalizedSpeakerId)) {
+      onNotice("请填写火山控制台中 S_ 开头的音色槽位 ID");
+      return;
+    }
     if (
       !selected ||
       !displayName.trim() ||
@@ -1796,6 +2060,10 @@ function ClonePanel({
         model_id: modelId,
         display_name: displayName.trim(),
         public_name: publicName.trim(),
+        speaker_id: isVolcengineClone ? normalizedSpeakerId : undefined,
+        provider_account_id: isVolcengineClone ? providerAccountId : undefined,
+        provider_project_name: isVolcengineClone ? providerProjectName : undefined,
+        clone_language: isVolcengineClone ? cloneLanguage : undefined,
       }, selectedFile);
     } finally {
       setWorking(false);
@@ -1846,7 +2114,7 @@ function ClonePanel({
               {isQwenClone
                 ? "WAV 16-bit / MP3 / M4A · 推荐 10–20 秒 · 不超过 10 MB"
                 : isVolcengineClone
-                  ? "WAV / MP3 / OGG / M4A / AAC / PCM · 不超过 10 MB"
+                  ? "推荐 14–30 秒单人人声 WAV · 无音乐与噪声 · 不超过 10 MB"
                   : isMiniMaxClone
                     ? "WAV / MP3 / M4A · 10 秒至 5 分钟 · 不超过 20 MB"
                     : "WAV / MP3 / M4A · 建议 10–30 秒 · 不超过 20 MB"}
@@ -1891,6 +2159,130 @@ function ClonePanel({
                   ))}
                 </select>
               </div>
+              {isVolcengineClone && (
+                <>
+                  <div className="clone-field">
+                    <label htmlFor="clone-account">火山账号</label>
+                    <select
+                      id="clone-account"
+                      value={providerAccountId}
+                      onChange={(event) => {
+                        slotRequestRef.current += 1;
+                        setProviderAccountId(event.target.value);
+                        setSlotsLoading(false);
+                        setSpeakerId("");
+                        setVoiceSlots([]);
+                        setSlotMessage("");
+                      }}
+                      disabled={!volcengineAccounts.length}
+                    >
+                      {!volcengineAccounts.length && <option value="">尚未配置项目</option>}
+                      {volcengineAccounts.map((account) => (
+                        <option value={account.id} key={account.id}>
+                          {account.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="clone-field">
+                    <label htmlFor="clone-project">火山项目</label>
+                    <select
+                      id="clone-project"
+                      value={providerProjectName}
+                      onChange={(event) => {
+                        setProviderProjectName(event.target.value);
+                        setSpeakerId("");
+                        setVoiceSlots([]);
+                        setSlotMessage("");
+                      }}
+                      disabled={!volcengineProjects.length}
+                    >
+                      {!volcengineProjects.length && <option value="">请先同步项目</option>}
+                      {volcengineProjects.map((project) => (
+                        <option value={project.project_name} key={project.id}>
+                          {project.display_name || project.project_name}
+                          {project.display_name !== project.project_name ? ` · ${project.project_name}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="clone-field">
+                    <label htmlFor="clone-language">参考音频语言</label>
+                    <select
+                      id="clone-language"
+                      value={cloneLanguage}
+                      onChange={(event) => setCloneLanguage(Number(event.target.value))}
+                    >
+                      <option value={0}>中文</option>
+                      <option value={1}>英语</option>
+                      <option value={2}>日语</option>
+                      <option value={3}>西班牙语</option>
+                      <option value={4}>印尼语</option>
+                      <option value={5}>葡萄牙语</option>
+                      <option value={8}>韩语</option>
+                    </select>
+                  </div>
+                  <div className="clone-field">
+                    <div className="clone-field-label">
+                      <label htmlFor="clone-speaker-id">音色槽位</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextMode = slotMode === "auto" ? "manual" : "auto";
+                          slotRequestRef.current += 1;
+                          setSlotMode(nextMode);
+                          setSlotsLoading(false);
+                          setSpeakerId("");
+                          setVoiceSlots([]);
+                          setSlotMessage("");
+                        }}
+                      >
+                        {slotMode === "auto" ? "手动填写" : "自动查询"}
+                      </button>
+                    </div>
+                    {slotMode === "auto" ? (
+                      <div className="clone-slot-row">
+                        <select
+                          id="clone-speaker-id"
+                          value={speakerId}
+                          onChange={(event) => setSpeakerId(event.target.value)}
+                          disabled={slotsLoading || !providerAccountId || !voiceSlots.length}
+                        >
+                          {!voiceSlots.length && (
+                            <option value="">
+                              {slotsLoading ? "正在查询空槽位..." : "没有可选择的空槽位"}
+                            </option>
+                          )}
+                          {voiceSlots.map((slot) => (
+                            <option value={slot.speaker_id} key={slot.speaker_id}>
+                              {slot.alias ? `${slot.alias} · ` : ""}{slot.speaker_id}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="icon-button clone-slot-refresh"
+                          type="button"
+                          onClick={() => void loadVoiceSlots(providerAccountId)}
+                          disabled={slotsLoading || !providerAccountId}
+                          title="刷新空槽位"
+                          aria-label="刷新空槽位"
+                        >
+                          <RefreshCw size={18} className={slotsLoading ? "spinning" : ""} />
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        id="clone-speaker-id"
+                        value={speakerId}
+                        onChange={(event) => setSpeakerId(event.target.value)}
+                        placeholder="S_..."
+                        autoComplete="off"
+                      />
+                    )}
+                    {slotMessage && <small className="clone-field-message">{slotMessage}</small>}
+                  </div>
+                </>
+              )}
               <div className="clone-field">
                 <label htmlFor="clone-display-name">显示名称</label>
                 <input
@@ -1916,7 +2308,9 @@ function ClonePanel({
                 !selected ||
                 !selectedFile ||
                 !displayName.trim() ||
-                !publicName.trim()
+                !publicName.trim() ||
+                (isVolcengineClone &&
+                  (!providerAccountId || !/^S_.+/.test(speakerId.trim())))
               }
             >
               <Mic2 size={17} />
@@ -1927,7 +2321,7 @@ function ClonePanel({
               {isQwenClone
                 ? "创建时会上传样本并取得远端 Voice ID；后续合成只发送 Voice ID。"
                 : isVolcengineClone
-                  ? "创建时上传样本并取得远端音色 ID；首次正式合成可能触发厂商音色槽位计费。"
+                  ? "空槽位按所选火山项目读取；创建后的音色会继续绑定该项目。"
                   : isMiniMaxClone
                     ? "创建时上传样本并取得远端 Voice ID；7 天内未正式使用的音色可能被厂商删除。"
                     : "该模型会在每次生成语音时向厂商发送本地参考音频。"}
@@ -3149,6 +3543,11 @@ function ProviderSettings({ models, panelId, labelledBy }: { models: Model[]; pa
   const [showKey, setShowKey] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
+  const [projects, setProjects] = useState<ProviderProject[]>([]);
+  const [projectInput, setProjectInput] = useState("");
+  const [projectsWorking, setProjectsWorking] = useState(false);
+  const [showProjectAdd, setShowProjectAdd] = useState(false);
+  const [copiedProject, setCopiedProject] = useState("");
   const [form, setForm] = useState({
     display_name: "",
     api_key: "",
@@ -3186,6 +3585,29 @@ function ProviderSettings({ models, panelId, labelledBy }: { models: Model[]; pa
     });
     setShowKey(false);
   }, [provider, accounts, spec]);
+
+  const loadProjects = async (accountId = editingId) => {
+    if (!accountId || provider !== "volcengine") {
+      setProjects([]);
+      return;
+    }
+    try {
+      const result = await api<{ projects: ProviderProject[] }>(
+        `/api/provider-accounts/${encodeURIComponent(accountId)}/projects`,
+      );
+      setProjects(result.projects);
+    } catch {
+      setProjects([]);
+    }
+  };
+  useEffect(() => {
+    void loadProjects(editingId);
+    setProjectInput("");
+    setShowProjectAdd(false);
+    setCopiedProject("");
+    // Account selection determines the project list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, provider]);
 
   const chooseAccount = (account?: ProviderAccount) => {
     setEditingId(account?.id || null);
@@ -3246,6 +3668,72 @@ function ProviderSettings({ models, panelId, labelledBy }: { models: Model[]; pa
       setMessage(error instanceof Error ? error.message : "检查失败");
     } finally {
       setWorking(false);
+    }
+  };
+  const syncProjects = async () => {
+    if (!editingId) return;
+    setProjectsWorking(true);
+    setMessage("正在同步火山项目...");
+    try {
+      const result = await api<{
+        projects: ProviderProject[];
+        synced: number;
+        keys_synced: number;
+        projects_with_api_key: number;
+      }>(
+        `/api/provider-accounts/${encodeURIComponent(editingId)}/projects/sync`,
+        { method: "POST" },
+      );
+      setProjects(result.projects);
+      setMessage(`已同步 ${result.synced} 个项目，其中 ${result.projects_with_api_key} 个项目已有可用 API Key。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "项目同步失败");
+    } finally {
+      setProjectsWorking(false);
+    }
+  };
+  const addProject = async () => {
+    if (!editingId || !projectInput.trim()) return;
+    setProjectsWorking(true);
+    try {
+      const created = await api<ProviderProject>(
+        `/api/provider-accounts/${encodeURIComponent(editingId)}/projects`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_name: projectInput.trim() }),
+        },
+      );
+      setProjects((current) => [...current, created].sort((a, b) => a.display_name.localeCompare(b.display_name)));
+      setProjectInput("");
+      setShowProjectAdd(false);
+      setMessage("项目已添加。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "添加项目失败");
+    } finally {
+      setProjectsWorking(false);
+    }
+  };
+  const removeProject = async (project: ProviderProject) => {
+    if (!editingId || !window.confirm(`删除项目“${project.display_name}”？`)) return;
+    setProjectsWorking(true);
+    try {
+      await api(`/api/provider-accounts/${encodeURIComponent(editingId)}/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      setMessage("项目已删除。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除项目失败");
+    } finally {
+      setProjectsWorking(false);
+    }
+  };
+  const copyProjectName = async (projectName: string) => {
+    try {
+      await navigator.clipboard.writeText(projectName);
+      setCopiedProject(projectName);
+      window.setTimeout(() => setCopiedProject(""), 1600);
+    } catch {
+      setMessage("ProjectName 复制失败");
     }
   };
   const remove = async () => {
@@ -3422,15 +3910,131 @@ function ProviderSettings({ models, panelId, labelledBy }: { models: Model[]; pa
                     />
                   </div>
                 </div>
-                <div className="field full">
-                  <label>项目名称（ProjectName）</label>
-                  <input
-                    value={form.project_name}
-                    onChange={(event) => setForm({ ...form, project_name: event.target.value })}
-                    placeholder="例如：default"
-                  />
-                  <small>批量同步接口按项目查询音色；填写声音复刻项目名称。旧版控制台的 APP ID、Access Token、Secret Key 不属于这里的 OpenAPI AK/SK。</small>
-                </div>
+                <section className="provider-projects-field" aria-labelledby="provider-projects-title">
+                  <div className="provider-projects-head">
+                    <div className="provider-projects-heading">
+                      <div>
+                        <h4 id="provider-projects-title">项目管理</h4>
+                        <p>声音克隆、音色同步和空槽位都会按所选项目查询。</p>
+                      </div>
+                      <span>{projects.length} 个项目</span>
+                    </div>
+                    <div className="provider-projects-actions">
+                      <button
+                        className="secondary-button compact"
+                        type="button"
+                        onClick={() => void syncProjects()}
+                        disabled={!editingId || projectsWorking}
+                      >
+                        <RefreshCw size={16} className={projectsWorking ? "spinning" : ""} />
+                        同步项目与密钥
+                      </button>
+                      <button
+                        className={showProjectAdd ? "secondary-button compact active" : "secondary-button compact"}
+                        type="button"
+                        onClick={() => setShowProjectAdd((currentValue) => !currentValue)}
+                        disabled={!editingId || projectsWorking}
+                        aria-expanded={showProjectAdd}
+                      >
+                        <Plus size={16} />
+                        添加项目
+                      </button>
+                    </div>
+                  </div>
+
+                  {showProjectAdd && (
+                    <div className="provider-project-add">
+                      <div>
+                        <label htmlFor="manual-project-name">ProjectName</label>
+                        <input
+                          id="manual-project-name"
+                          value={projectInput}
+                          onChange={(event) => setProjectInput(event.target.value)}
+                          onKeyDown={(event) => { if (event.key === "Enter") void addProject(); }}
+                          placeholder="例如 default"
+                          disabled={!editingId || projectsWorking}
+                          autoFocus
+                        />
+                      </div>
+                      <button
+                        className="primary-button compact"
+                        type="button"
+                        onClick={() => void addProject()}
+                        disabled={!editingId || projectsWorking || !projectInput.trim()}
+                      >
+                        确认添加
+                      </button>
+                      <p>仅在 IAM 无权读取项目时手动添加；这里填写的是 ProjectName。</p>
+                    </div>
+                  )}
+
+                  <div className="provider-project-list">
+                    {projects.map((project) => {
+                      const isDefault = project.project_name === "default";
+                      const displayName = isDefault
+                        ? "默认项目"
+                        : project.display_name === project.project_name && project.project_name.startsWith("volcengine_standalone_project_")
+                          ? "平台项目"
+                        : project.display_name || project.project_name;
+                      const showTechnicalName = displayName !== project.project_name;
+                      const sourceLabel = project.source === "manual"
+                        ? "手动添加"
+                        : project.source === "legacy"
+                          ? "旧配置"
+                          : "IAM 同步";
+                      const apiKeyStatus = project.api_key_status || "unknown";
+                      const apiKeyLabel = apiKeyStatus === "available"
+                        ? "API Key 可用"
+                        : apiKeyStatus === "missing"
+                          ? "未创建 API Key"
+                          : apiKeyStatus === "error"
+                            ? "密钥同步失败"
+                            : "密钥未同步";
+                      const apiKeyTitle = apiKeyStatus === "available"
+                        ? [project.api_key_name, project.api_key_hint, project.api_key_count && project.api_key_count > 1 ? `${project.api_key_count} 个可用 Key，已自动选择最新一个` : ""].filter(Boolean).join(" · ")
+                        : project.api_key_sync_error || apiKeyLabel;
+                      return (
+                        <div className="provider-project-row" key={project.id}>
+                          <div className="provider-project-identity">
+                            <strong title={displayName}>{displayName}</strong>
+                            {showTechnicalName && <code title={project.project_name}>{project.project_name}</code>}
+                          </div>
+                          <div className="provider-project-meta">
+                            {project.has_permission === false && <span className="project-permission denied">无权限</span>}
+                            <span className={`project-key-status ${apiKeyStatus}`} title={apiKeyTitle}>{apiKeyLabel}</span>
+                            <span>{sourceLabel}</span>
+                          </div>
+                          <div className="provider-project-row-actions">
+                            <button
+                              className="icon-button"
+                              type="button"
+                              title="复制 ProjectName"
+                              aria-label={`复制 ProjectName ${project.project_name}`}
+                              onClick={() => void copyProjectName(project.project_name)}
+                            >
+                              {copiedProject === project.project_name ? <Check size={16} /> : <Copy size={16} />}
+                            </button>
+                            <button
+                              className="icon-button project-delete-button"
+                              type="button"
+                              title="从本地项目列表删除"
+                              aria-label={`删除项目 ${displayName}`}
+                              onClick={() => void removeProject(project)}
+                              disabled={projectsWorking}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {!projects.length && (
+                      <div className="provider-project-empty">
+                        保存凭据后同步项目，或手动添加 ProjectName。
+                      </div>
+                    )}
+                  </div>
+                </section>
               </>
             )}
           </div>

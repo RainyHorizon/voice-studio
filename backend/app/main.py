@@ -33,7 +33,21 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .credentials import CredentialStoreError, credential_store_name, credential_store_status, delete_api_key, environment_credentials_enabled, environment_provider_credentials, load_api_key, load_provider_credentials, save_api_key, save_provider_credentials
+from .credentials import (
+    CredentialStoreError,
+    credential_store_name,
+    credential_store_status,
+    delete_api_key,
+    delete_project_api_key,
+    environment_credentials_enabled,
+    environment_provider_credentials,
+    load_api_key,
+    load_project_api_key,
+    load_provider_credentials,
+    save_api_key,
+    save_project_api_key,
+    save_provider_credentials,
+)
 from .providers.base import ProviderError, SynthesisRequest
 from .providers.demo import DemoProvider
 from .providers.mimo import DEFAULT_ENDPOINT as MIMO_ENDPOINT
@@ -41,7 +55,7 @@ from .providers.mimo import MIMO_MODELS, MiMoProvider
 from .providers.qwen import DEFAULT_ENDPOINT as QWEN_ENDPOINT
 from .providers.qwen import QWEN_MODELS, QwenProvider
 from .providers.volcengine import DEFAULT_ENDPOINT as VOLCENGINE_ENDPOINT
-from .providers.volcengine import VOLCENGINE_MODELS, VolcengineProvider
+from .providers.volcengine import VOLCENGINE_CLONE_LANGUAGES, VOLCENGINE_MODELS, VolcengineProvider
 from .providers.minimax import DEFAULT_ENDPOINT as MINIMAX_PROVIDER_ENDPOINT
 from .providers.minimax import MINIMAX_MODELS, MiniMaxProvider
 from .storage import (
@@ -99,7 +113,7 @@ TRUSTED_HOSTS.extend(
     if host.strip()
 )
 
-app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.2.0"))
+app = FastAPI(title="Voice Studio Gateway", version=os.getenv("VOICE_STUDIO_VERSION", "1.3.0"))
 app.add_middleware(CORSMiddleware, allow_origins=sorted(LOCAL_BROWSER_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 demo_provider = DemoProvider()
@@ -246,7 +260,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS voices (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model_id TEXT NOT NULL,
               provider_voice_id TEXT, display_name TEXT NOT NULL, public_name TEXT NOT NULL, voice_type TEXT NOT NULL,
               status TEXT NOT NULL, languages TEXT NOT NULL, created_at TEXT NOT NULL, preview_asset TEXT,
-              design_prompt TEXT NOT NULL DEFAULT '');
+              design_prompt TEXT NOT NULL DEFAULT '', provider_account_id TEXT, provider_project_name TEXT);
             CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, model TEXT NOT NULL, voice TEXT NOT NULL,
               input_chars INTEGER NOT NULL, status TEXT NOT NULL, duration_ms INTEGER, audio_path TEXT, created_at TEXT NOT NULL,
               source TEXT NOT NULL, demo INTEGER NOT NULL DEFAULT 1, input_text TEXT NOT NULL DEFAULT '');
@@ -263,11 +277,59 @@ def init_db() -> None:
               account_ref TEXT, region TEXT, endpoint TEXT, status TEXT NOT NULL, secret_hint TEXT NOT NULL,
               verification_scope TEXT NOT NULL, verification_message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
               last_verified_at TEXT);
+            CREATE TABLE IF NOT EXISTS provider_projects (id TEXT PRIMARY KEY, provider_account_id TEXT NOT NULL,
+              project_name TEXT NOT NULL, display_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+              has_permission INTEGER, source TEXT NOT NULL DEFAULT 'manual', created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL, last_synced_at TEXT, has_api_key INTEGER,
+              api_key_name TEXT, api_key_hint TEXT, api_key_remote_id TEXT,
+              api_key_count INTEGER NOT NULL DEFAULT 0, api_key_last_synced_at TEXT,
+              api_key_sync_error TEXT,
+              UNIQUE(provider_account_id, project_name));
+            CREATE INDEX IF NOT EXISTS idx_provider_projects_account ON provider_projects(provider_account_id);
             """
         )
         voice_columns = {row[1] for row in connection.execute("PRAGMA table_info(voices)").fetchall()}
         if "design_prompt" not in voice_columns:
             connection.execute("ALTER TABLE voices ADD COLUMN design_prompt TEXT NOT NULL DEFAULT ''")
+        if "provider_account_id" not in voice_columns:
+            connection.execute("ALTER TABLE voices ADD COLUMN provider_account_id TEXT")
+        if "provider_project_name" not in voice_columns:
+            connection.execute("ALTER TABLE voices ADD COLUMN provider_project_name TEXT")
+        project_columns = {row[1] for row in connection.execute("PRAGMA table_info(provider_projects)").fetchall()}
+        for column, definition in {
+            "has_api_key": "INTEGER",
+            "api_key_name": "TEXT",
+            "api_key_hint": "TEXT",
+            "api_key_remote_id": "TEXT",
+            "api_key_count": "INTEGER NOT NULL DEFAULT 0",
+            "api_key_last_synced_at": "TEXT",
+            "api_key_sync_error": "TEXT",
+        }.items():
+            if column not in project_columns:
+                connection.execute(f"ALTER TABLE provider_projects ADD COLUMN {column} {definition}")
+        # Versions before project discovery stored one project on the account row.
+        # Preserve it as a project record without changing existing account IDs.
+        account_rows = connection.execute(
+            "SELECT id, provider, account_ref, created_at, updated_at FROM provider_accounts WHERE provider='volcengine' AND account_ref IS NOT NULL AND TRIM(account_ref) != ''"
+        ).fetchall()
+        for account in account_rows:
+            connection.execute(
+                """INSERT OR IGNORE INTO provider_projects
+                   (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "pp_" + account["id"],
+                    account["id"],
+                    account["account_ref"],
+                    account["account_ref"],
+                    "active",
+                    1,
+                    "legacy",
+                    account["created_at"],
+                    account["updated_at"],
+                    account["updated_at"],
+                ),
+            )
         connection.execute(
             """UPDATE voices SET model_id='minimax-voice-design'
                WHERE provider='minimax' AND voice_type='design' AND model_id='speech-2.8-turbo'"""
@@ -466,6 +528,8 @@ class ImportVoiceBody(BaseModel):
     display_name: str
     public_name: str
     languages: list[str] = ["zh-CN"]
+    provider_account_id: str | None = Field(default=None, max_length=100)
+    provider_project_name: str | None = Field(default=None, max_length=200)
 
 
 class ImportVoicesBody(BaseModel):
@@ -497,6 +561,11 @@ class ProviderAccountBody(BaseModel):
     openapi_access_key: str | None = Field(default=None, max_length=4096)
     openapi_secret_key: str | None = Field(default=None, max_length=4096)
     project_name: str | None = Field(default=None, max_length=200)
+
+
+class ProviderProjectBody(BaseModel):
+    project_name: str = Field(min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, max_length=200)
 
 
 class VoiceDesignBody(BaseModel):
@@ -668,17 +737,63 @@ def voice_payload(model, voice: sqlite3.Row, fallback: str) -> str:
     return voice["provider_voice_id"] or fallback
 
 
-def provider_for(model_provider: str):
+def provider_account_for(model_provider: str, account_id: str | None = None, *, require_explicit: bool = False) -> sqlite3.Row:
+    if model_provider not in {"dashscope", "mimo", "volcengine", "minimax"}:
+        raise ProviderError("本地演示模型没有厂商配置", code="provider_not_configured", status=409)
+    with db() as connection:
+        if account_id:
+            row = connection.execute(
+                "SELECT * FROM provider_accounts WHERE id=? AND provider=?",
+                (account_id, model_provider),
+            ).fetchone()
+            if not row:
+                raise ProviderError("所选厂商配置不存在或与当前厂商不匹配", code="provider_account_not_found", status=409)
+            if model_provider == "volcengine" and row["account_ref"]:
+                connection.execute(
+                    """INSERT OR IGNORE INTO provider_projects
+                       (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        "pp_" + row["id"], row["id"], row["account_ref"], row["account_ref"],
+                        "active", 1, "legacy", row["created_at"], row["updated_at"], row["updated_at"],
+                    ),
+                )
+            return row
+        rows = connection.execute(
+            "SELECT * FROM provider_accounts WHERE provider=? ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at",
+            (model_provider,),
+        ).fetchall()
+    provider_name = {"dashscope": "通义千问", "mimo": "小米 MiMo", "volcengine": "火山引擎", "minimax": "MiniMax"}[model_provider]
+    if not rows:
+        raise ProviderError(f"尚未在设置中配置{provider_name} API Key", code="provider_not_configured", status=409)
+    if require_explicit and len(rows) > 1:
+        raise ProviderError(f"检测到多个{provider_name}配置，请先选择项目", code="provider_account_required", status=409)
+    row = rows[0]
+    if model_provider == "volcengine" and row["account_ref"]:
+        with db() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO provider_projects
+                   (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "pp_" + row["id"], row["id"], row["account_ref"], row["account_ref"],
+                    "active", 1, "legacy", row["created_at"], row["updated_at"], row["updated_at"],
+                ),
+            )
+    return row
+
+
+def provider_for(
+    model_provider: str,
+    account_id: str | None = None,
+    project_name: str | None = None,
+    *,
+    require_project_api_key: bool = True,
+):
     if model_provider not in {"dashscope", "mimo", "volcengine", "minimax"}:
         return demo_provider
-    with db() as connection:
-        row = connection.execute(
-            "SELECT * FROM provider_accounts WHERE provider=? ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1",
-            (model_provider,),
-        ).fetchone()
+    row = provider_account_for(model_provider, account_id)
     provider_name = {"dashscope": "通义千问", "mimo": "小米 MiMo", "volcengine": "火山引擎", "minimax": "MiniMax"}[model_provider]
-    if not row:
-        raise ProviderError(f"尚未在设置中配置{provider_name} API Key", code="provider_not_configured", status=409)
     try:
         api_key = load_api_key(row["id"])
     except CredentialStoreError as exc:
@@ -694,9 +809,26 @@ def provider_for(model_provider: str):
     if model_provider == "volcengine":
         try:
             credentials = load_provider_credentials(row["id"])
+            selected_project = project_name or row["account_ref"] or ""
+            project_api_key = load_project_api_key(row["id"], selected_project) if selected_project else None
         except CredentialStoreError as exc:
             raise ProviderError(str(exc), code="credential_store_error", status=503) from exc
-        return VolcengineProvider(api_key, endpoint, credentials.get("openapi_access_key"), credentials.get("openapi_secret_key"), row["account_ref"])
+        if project_api_key:
+            api_key = project_api_key
+        elif require_project_api_key and selected_project and selected_project != (row["account_ref"] or ""):
+            raise ProviderError(
+                "当前火山项目没有已同步的语音 API Key，请到设置中点击“同步项目与密钥”；"
+                "如果仍显示未创建，请先在火山控制台为该项目创建 API Key",
+                code="volcengine_project_api_key_missing",
+                status=409,
+            )
+        return VolcengineProvider(
+            api_key,
+            endpoint,
+            credentials.get("openapi_access_key"),
+            credentials.get("openapi_secret_key"),
+            selected_project,
+        )
     if model_provider == "minimax":
         return MiniMaxProvider(api_key, endpoint)
     return MiMoProvider(api_key, endpoint)
@@ -891,6 +1023,232 @@ def list_provider_accounts():
     return [account_response(row) for row in rows]
 
 
+def project_response(row: sqlite3.Row) -> dict[str, Any]:
+    payload = {
+        **dict(row),
+        "has_permission": None if row["has_permission"] is None else bool(row["has_permission"]),
+        "has_api_key": None if row["has_api_key"] is None else bool(row["has_api_key"]),
+    }
+    if row["api_key_sync_error"]:
+        payload["api_key_status"] = "error"
+    elif row["has_api_key"] is None:
+        payload["api_key_status"] = "unknown"
+    else:
+        payload["api_key_status"] = "available" if row["has_api_key"] else "missing"
+    return payload
+
+
+@app.get("/api/provider-accounts/{account_id}/projects")
+def list_provider_projects(account_id: str):
+    try:
+        provider_account_for("volcengine", account_id)
+    except ProviderError as exc:
+        raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT * FROM provider_projects WHERE provider_account_id=? ORDER BY display_name, project_name",
+            (account_id,),
+        ).fetchall()
+    return {"account_id": account_id, "projects": [project_response(row) for row in rows]}
+
+
+@app.post("/api/provider-accounts/{account_id}/projects/sync")
+async def sync_provider_projects(account_id: str):
+    try:
+        provider_account_for("volcengine", account_id)
+        adapter = provider_for("volcengine", account_id, require_project_api_key=False)
+        if not isinstance(adapter, VolcengineProvider):
+            raise ProviderError("火山引擎适配器不可用", code="provider_not_configured", status=409)
+        remote_projects = await adapter.list_projects()
+    except ProviderError as exc:
+        raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
+    timestamp = now()
+    discovered: list[str] = []
+    key_results: dict[str, dict[str, Any]] = {}
+    for item in remote_projects:
+        project_name = str(item.get("ProjectName") or item.get("project_name") or "").strip()
+        if not project_name:
+            continue
+        try:
+            remote_keys = await adapter.list_api_keys(project_name)
+            available_keys = [
+                key for key in remote_keys
+                if not bool(key.get("Disable") if "Disable" in key else key.get("disable"))
+                and str(key.get("APIKey") or key.get("api_key") or "").strip()
+            ]
+            def key_order(key: dict[str, Any]) -> tuple[int, str]:
+                raw_id = key.get("ID") if "ID" in key else key.get("id")
+                try:
+                    return int(raw_id), str(raw_id or "")
+                except (TypeError, ValueError):
+                    return 0, str(raw_id or "")
+            selected_key = max(available_keys, key=key_order) if available_keys else None
+            if selected_key:
+                secret = str(selected_key.get("APIKey") or selected_key.get("api_key") or "").strip()
+                save_project_api_key(account_id, project_name, secret)
+                key_results[project_name] = {
+                    "has_api_key": 1,
+                    "api_key_name": str(selected_key.get("Name") or selected_key.get("name") or "API Key"),
+                    "api_key_hint": "••••" + secret[-4:],
+                    "api_key_remote_id": str(selected_key.get("ID") or selected_key.get("id") or ""),
+                    "api_key_count": len(available_keys),
+                    "api_key_last_synced_at": timestamp,
+                    "api_key_sync_error": None,
+                }
+            else:
+                delete_project_api_key(account_id, project_name)
+                key_results[project_name] = {
+                    "has_api_key": 0,
+                    "api_key_name": None,
+                    "api_key_hint": None,
+                    "api_key_remote_id": None,
+                    "api_key_count": 0,
+                    "api_key_last_synced_at": timestamp,
+                    "api_key_sync_error": None,
+                }
+        except ProviderError as exc:
+            key_results[project_name] = {"api_key_sync_error": str(exc)[:300]}
+        except CredentialStoreError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    with db() as connection:
+        for item in remote_projects:
+            project_name = str(item.get("ProjectName") or item.get("project_name") or "").strip()
+            if not project_name:
+                continue
+            display_name = str(item.get("DisplayName") or item.get("display_name") or project_name).strip() or project_name
+            status = str(item.get("Status") or item.get("status") or "active")
+            has_permission = item.get("HasPermission") if "HasPermission" in item else item.get("has_permission")
+            has_permission_value = None if has_permission is None else int(bool(has_permission))
+            project_id = "pp_" + hashlib.sha256(f"{account_id}:{project_name}".encode()).hexdigest()[:16]
+            connection.execute(
+                """INSERT INTO provider_projects
+                   (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(provider_account_id, project_name) DO UPDATE SET
+                     display_name=excluded.display_name,status=excluded.status,
+                     has_permission=excluded.has_permission,source='remote',updated_at=excluded.updated_at,last_synced_at=excluded.last_synced_at""",
+                (project_id, account_id, project_name, display_name, status, has_permission_value, "remote", timestamp, timestamp, timestamp),
+            )
+            key_result = key_results.get(project_name, {})
+            if key_result.get("api_key_last_synced_at"):
+                connection.execute(
+                    """UPDATE provider_projects SET has_api_key=?,api_key_name=?,api_key_hint=?,api_key_remote_id=?,
+                       api_key_count=?,api_key_last_synced_at=?,api_key_sync_error=?
+                       WHERE provider_account_id=? AND project_name=?""",
+                    (
+                        key_result["has_api_key"], key_result["api_key_name"], key_result["api_key_hint"],
+                        key_result["api_key_remote_id"], key_result["api_key_count"],
+                        key_result["api_key_last_synced_at"], None, account_id, project_name,
+                    ),
+                )
+            elif key_result.get("api_key_sync_error"):
+                connection.execute(
+                    "UPDATE provider_projects SET api_key_sync_error=? WHERE provider_account_id=? AND project_name=?",
+                    (key_result["api_key_sync_error"], account_id, project_name),
+                )
+            discovered.append(project_name)
+        if "default" not in discovered:
+            existing = connection.execute(
+                "SELECT 1 FROM provider_projects WHERE provider_account_id=? AND project_name='default'",
+                (account_id,),
+            ).fetchone()
+            if not existing:
+                connection.execute(
+                    """INSERT INTO provider_projects
+                       (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    ("pp_" + hashlib.sha256(f"{account_id}:default".encode()).hexdigest()[:16], account_id, "default", "default（默认项目）", "active", None, "fallback", timestamp, timestamp, timestamp),
+                )
+        rows = connection.execute(
+            "SELECT * FROM provider_projects WHERE provider_account_id=? ORDER BY display_name, project_name",
+            (account_id,),
+        ).fetchall()
+    return {
+        "account_id": account_id,
+        "projects": [project_response(row) for row in rows],
+        "synced": len(discovered),
+        "keys_synced": sum(1 for result in key_results.values() if result.get("api_key_last_synced_at")),
+        "projects_with_api_key": sum(1 for result in key_results.values() if result.get("has_api_key") == 1),
+    }
+
+
+@app.post("/api/provider-accounts/{account_id}/projects")
+def add_provider_project(account_id: str, body: ProviderProjectBody):
+    try:
+        provider_account_for("volcengine", account_id)
+    except ProviderError as exc:
+        raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
+    project_name = body.project_name.strip()
+    display_name = (body.display_name or project_name).strip() or project_name
+    timestamp = now()
+    project_id = "pp_" + hashlib.sha256(f"{account_id}:{project_name}".encode()).hexdigest()[:16]
+    try:
+        with db() as connection:
+            connection.execute(
+                """INSERT INTO provider_projects
+                   (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (project_id, account_id, project_name, display_name, "active", None, "manual", timestamp, timestamp, None),
+            )
+            row = connection.execute("SELECT * FROM provider_projects WHERE id=?", (project_id,)).fetchone()
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "这个项目已经存在") from exc
+    return project_response(row)
+
+
+@app.delete("/api/provider-accounts/{account_id}/projects/{project_id}")
+def remove_provider_project(account_id: str, project_id: str):
+    with db() as connection:
+        row = connection.execute(
+            "SELECT * FROM provider_projects WHERE id=? AND provider_account_id=?",
+            (project_id, account_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "项目不存在")
+        bound = connection.execute(
+            "SELECT COUNT(*) FROM voices WHERE provider_account_id=? AND provider_project_name=? AND status='active'",
+            (account_id, row["project_name"]),
+        ).fetchone()[0]
+        if bound:
+            raise HTTPException(409, "该项目仍有音色绑定，不能删除")
+        try:
+            delete_project_api_key(account_id, row["project_name"])
+        except CredentialStoreError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        connection.execute("DELETE FROM provider_projects WHERE id=?", (project_id,))
+    return {"deleted": True, "id": project_id}
+
+
+@app.get("/api/provider-accounts/{account_id}/volcengine-slots")
+async def list_volcengine_slots(account_id: str, project_name: str | None = None):
+    try:
+        account = provider_account_for("volcengine", account_id)
+        selected_project = project_name.strip() if project_name else ""
+        if selected_project:
+            with db() as connection:
+                project = connection.execute(
+                    "SELECT project_name FROM provider_projects WHERE provider_account_id=? AND project_name=?",
+                    (account_id, selected_project),
+                ).fetchone()
+            if not project:
+                raise ProviderError("所选火山项目不存在，请先同步项目列表", code="volcengine_project_not_found", status=409)
+        else:
+            selected_project = account["account_ref"] or ""
+        if not selected_project:
+            raise ProviderError("请先同步或手动添加火山项目", code="volcengine_project_not_configured", status=409)
+        adapter = provider_for("volcengine", account_id, selected_project, require_project_api_key=False)
+        if not isinstance(adapter, VolcengineProvider):
+            raise ProviderError("火山引擎适配器不可用", code="provider_not_configured", status=409)
+        slots = await adapter.list_empty_voice_slots()
+    except ProviderError as exc:
+        raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
+    return {
+        "account_id": account["id"],
+        "project_name": selected_project,
+        "slots": slots,
+    }
+
+
 @app.post("/api/provider-accounts")
 def create_provider_account(body: ProviderAccountBody):
     spec, values = normalize_account(body)
@@ -905,6 +1263,13 @@ def create_provider_account(body: ProviderAccountBody):
                 "INSERT INTO provider_accounts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (account_id, values["provider"], values["display_name"], values["account_ref"], values["region"], values["endpoint"], "configured", "••••" + body.api_key[-4:], spec["verification"], "凭据已安全保存，尚未完成真实鉴权。", timestamp, timestamp, None),
             )
+            if values["provider"] == "volcengine" and values["account_ref"]:
+                connection.execute(
+                    """INSERT INTO provider_projects
+                       (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    ("pp_" + account_id, account_id, values["account_ref"], values["account_ref"], "active", 1, "legacy", timestamp, timestamp, timestamp),
+                )
             row = connection.execute("SELECT * FROM provider_accounts WHERE id=?", (account_id,)).fetchone()
     except CredentialStoreError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -936,6 +1301,14 @@ def update_provider_account(account_id: str, body: ProviderAccountBody):
             "UPDATE provider_accounts SET provider=?,display_name=?,account_ref=?,region=?,endpoint=?,status=?,secret_hint=?,verification_scope=?,verification_message=?,updated_at=?,last_verified_at=NULL WHERE id=?",
             (values["provider"], values["display_name"], values["account_ref"], values["region"], values["endpoint"], "configured", secret_hint, spec["verification"], "配置已更新，等待重新验证。", now(), account_id),
         )
+        if values["provider"] == "volcengine" and values["account_ref"]:
+            timestamp = now()
+            connection.execute(
+                """INSERT OR IGNORE INTO provider_projects
+                   (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                ("pp_" + account_id, account_id, values["account_ref"], values["account_ref"], "active", 1, "legacy", timestamp, timestamp, timestamp),
+            )
         row = connection.execute("SELECT * FROM provider_accounts WHERE id=?", (account_id,)).fetchone()
     return account_response(row)
 
@@ -944,13 +1317,31 @@ def update_provider_account(account_id: str, body: ProviderAccountBody):
 def remove_provider_account(account_id: str):
     with db() as connection:
         row = connection.execute("SELECT id FROM provider_accounts WHERE id=?", (account_id,)).fetchone()
+        if row:
+            bound = connection.execute(
+                "SELECT COUNT(*) FROM voices WHERE provider_account_id=? AND status='active'",
+                (account_id,),
+            ).fetchone()[0]
+            if bound:
+                raise HTTPException(409, "该账号仍有音色绑定，请先移除或重新绑定这些音色")
     if not row:
         raise HTTPException(404, "厂商账号不存在")
+    with db() as connection:
+        project_names = [
+            item["project_name"]
+            for item in connection.execute(
+                "SELECT project_name FROM provider_projects WHERE provider_account_id=?",
+                (account_id,),
+            ).fetchall()
+        ]
     try:
+        for project_name in project_names:
+            delete_project_api_key(account_id, project_name)
         delete_api_key(account_id)
     except CredentialStoreError as exc:
         raise HTTPException(503, str(exc)) from exc
     with db() as connection:
+        connection.execute("DELETE FROM provider_projects WHERE provider_account_id=?", (account_id,))
         connection.execute("DELETE FROM provider_accounts WHERE id=?", (account_id,))
     return {"deleted": True, "id": account_id}
 
@@ -1106,9 +1497,22 @@ def list_voices():
     ]
 
 
-def voice_already_imported(provider: str, model_id: str, provider_voice_id: str) -> bool:
+def voice_already_imported(
+    provider: str,
+    model_id: str,
+    provider_voice_id: str,
+    provider_account_id: str | None = None,
+    provider_project_name: str | None = None,
+) -> bool:
     with db() as connection:
-        if provider == "minimax":
+        if provider == "volcengine" and provider_account_id and provider_project_name:
+            row = connection.execute(
+                """SELECT 1 FROM voices
+                   WHERE provider=? AND model_id=? AND provider_voice_id=?
+                     AND provider_account_id=? AND provider_project_name=? AND status='active'""",
+                (provider, model_id, provider_voice_id, provider_account_id, provider_project_name),
+            ).fetchone()
+        elif provider == "minimax":
             row = connection.execute(
                 "SELECT 1 FROM voices WHERE provider=? AND provider_voice_id=? AND status='active'",
                 (provider, provider_voice_id),
@@ -1122,11 +1526,34 @@ def voice_already_imported(provider: str, model_id: str, provider_voice_id: str)
 
 
 @app.get("/api/voices/cloud/{provider}")
-async def list_cloud_voices(provider: str):
+async def list_cloud_voices(provider: str, provider_account_id: str | None = None, provider_project_name: str | None = None):
     if provider not in {"dashscope", "minimax", "volcengine"}:
         raise HTTPException(400, "当前仅支持同步通义千问、火山引擎和 MiniMax 云端音色")
     try:
-        adapter = provider_for(provider)
+        account = provider_account_for(
+            provider,
+            provider_account_id,
+            require_explicit=provider == "volcengine",
+        )
+        project_name = provider_project_name.strip() if provider == "volcengine" and provider_project_name else None
+        if provider == "volcengine":
+            if not project_name:
+                project_name = account["account_ref"] or ""
+            if not project_name:
+                raise ProviderError("请先选择火山项目", code="volcengine_project_not_configured", status=409)
+            with db() as connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM provider_projects WHERE provider_account_id=? AND project_name=?",
+                    (account["id"], project_name),
+                ).fetchone()
+            if not exists:
+                raise ProviderError("所选火山项目不存在，请先同步项目列表", code="volcengine_project_not_found", status=409)
+        adapter = provider_for(
+            provider,
+            account["id"],
+            project_name,
+            require_project_api_key=provider != "volcengine",
+        )
         if provider == "dashscope" and isinstance(adapter, QwenProvider):
             items = await adapter.list_cloned_voices()
         elif provider == "minimax" and isinstance(adapter, MiniMaxProvider):
@@ -1150,9 +1577,17 @@ async def list_cloud_voices(provider: str):
         result.append(
             {
                 **item,
+                "provider_account_id": account["id"],
+                "provider_project_name": project_name or "" if provider == "volcengine" else "",
                 "compatible": compatible,
                 "compatibility_message": "" if compatible else "Voice Studio 尚未接入这个音色绑定的模型",
-                "imported": voice_already_imported(provider, model_id, item["provider_voice_id"]),
+                "imported": voice_already_imported(
+                    provider,
+                    model_id,
+                    item["provider_voice_id"],
+                    account["id"],
+                    project_name,
+                ),
             }
         )
     return {"provider": provider, "voices": result}
@@ -1175,19 +1610,48 @@ async def import_voice(body: ImportVoiceBody):
     with db() as connection:
         if connection.execute("SELECT 1 FROM voices WHERE public_name=? AND status='active'", (public_name,)).fetchone():
             raise HTTPException(409, "兼容别名已存在，请换一个名称")
-        if voice_already_imported(body.provider, body.model_id, provider_voice_id):
+        if body.provider != "volcengine" and voice_already_imported(body.provider, body.model_id, provider_voice_id):
             raise HTTPException(409, "这个厂商音色 ID 已经导入")
     if body.provider == "volcengine":
         try:
-            adapter = provider_for("volcengine")
+            account = provider_account_for(
+                "volcengine",
+                body.provider_account_id,
+                require_explicit=True,
+            )
+            project_name = body.provider_project_name.strip() if body.provider_project_name else account["account_ref"] or ""
+            if not project_name:
+                raise ProviderError("请先选择火山项目", code="volcengine_project_not_configured", status=409)
+            adapter = provider_for("volcengine", account["id"], project_name)
             if not isinstance(adapter, VolcengineProvider):
                 raise ProviderError("火山引擎适配器不可用", code="provider_not_configured", status=409)
             await adapter.validate_cloned_voice(provider_voice_id)
         except ProviderError as exc:
             raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
+        if voice_already_imported("volcengine", body.model_id, provider_voice_id, account["id"], project_name):
+            raise HTTPException(409, "这个厂商音色 ID 已经导入到当前项目")
     voice_id = "voice_" + uuid.uuid4().hex[:10]
     with db() as connection:
-        connection.execute("INSERT INTO voices (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,preview_asset) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (voice_id, body.provider, body.model_id, provider_voice_id, display_name, public_name, "imported", "active", json.dumps(body.languages, ensure_ascii=False), now(), None))
+        connection.execute(
+            """INSERT INTO voices
+               (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,preview_asset,provider_account_id,provider_project_name)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                voice_id,
+                body.provider,
+                body.model_id,
+                provider_voice_id,
+                display_name,
+                public_name,
+                "imported",
+                "active",
+                json.dumps(body.languages, ensure_ascii=False),
+                now(),
+                None,
+                account["id"] if body.provider == "volcengine" else None,
+                (project_name or "") if body.provider == "volcengine" else None,
+            ),
+        )
     return {"id": voice_id, "message": "已有厂商音色已导入，可以直接在合成工作台选择。", "voice": next(v for v in list_voices() if v["id"] == voice_id)}
 
 
@@ -1195,7 +1659,7 @@ async def import_voice(body: ImportVoiceBody):
 async def import_voices(body: ImportVoicesBody):
     normalized = []
     aliases: set[str] = set()
-    remote_ids: set[tuple[str, str, str]] = set()
+    remote_ids: set[tuple[str, str, str, str, str]] = set()
     for item in body.voices:
         model = resolve_model(f"{item.provider}/{item.model_id}")
         if not model or not model.supports_clone or "clone" not in model.operations:
@@ -1207,22 +1671,57 @@ async def import_voices(body: ImportVoicesBody):
         public_name = item.public_name.strip()
         if not provider_voice_id or not display_name or not public_name:
             raise HTTPException(400, "音色 ID、显示名称和兼容别名不能为空")
-        remote_key = (item.provider, "" if item.provider == "minimax" else item.model_id, provider_voice_id)
+        remote_key = (
+            item.provider,
+            "" if item.provider == "minimax" else item.model_id,
+            provider_voice_id,
+            item.provider_account_id or "" if item.provider == "volcengine" else "",
+            item.provider_project_name or "" if item.provider == "volcengine" else "",
+        )
         if public_name in aliases:
             raise HTTPException(409, f"批量导入中存在重复兼容别名：{public_name}")
         if remote_key in remote_ids:
             raise HTTPException(409, f"批量导入中存在重复厂商音色：{provider_voice_id}")
+        account = None
+        if item.provider == "volcengine":
+            try:
+                account = provider_account_for(
+                    "volcengine",
+                    item.provider_account_id,
+                    require_explicit=True,
+                )
+                project_name = item.provider_project_name.strip() if item.provider_project_name else account["account_ref"] or ""
+                if not project_name:
+                    raise ProviderError("请先选择火山项目", code="volcengine_project_not_configured", status=409)
+                with db() as connection:
+                    project = connection.execute(
+                        "SELECT 1 FROM provider_projects WHERE provider_account_id=? AND project_name=?",
+                        (account["id"], project_name),
+                    ).fetchone()
+                if not project:
+                    raise ProviderError("所选火山项目不存在，请先同步项目列表", code="volcengine_project_not_found", status=409)
+            except ProviderError as exc:
+                raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
+        else:
+            project_name = ""
         aliases.add(public_name)
         remote_ids.add(remote_key)
-        normalized.append((item, provider_voice_id, display_name, public_name))
+        normalized.append((item, provider_voice_id, display_name, public_name, account, project_name))
 
     with db() as connection:
-        for item, provider_voice_id, _, public_name in normalized:
+        for item, provider_voice_id, _, public_name, _, _ in normalized:
             if connection.execute(
                 "SELECT 1 FROM voices WHERE public_name=? AND status='active'", (public_name,)
             ).fetchone():
                 raise HTTPException(409, f"兼容别名已存在：{public_name}")
-            if item.provider == "minimax":
+            if item.provider == "volcengine" and account and project_name:
+                duplicate = connection.execute(
+                    """SELECT 1 FROM voices
+                       WHERE provider=? AND model_id=? AND provider_voice_id=?
+                         AND provider_account_id=? AND provider_project_name=? AND status='active'""",
+                    (item.provider, item.model_id, provider_voice_id, account["id"], project_name),
+                ).fetchone()
+            elif item.provider == "minimax":
                 duplicate = connection.execute(
                     "SELECT 1 FROM voices WHERE provider=? AND provider_voice_id=? AND status='active'",
                     (item.provider, provider_voice_id),
@@ -1236,11 +1735,13 @@ async def import_voices(body: ImportVoicesBody):
                 raise HTTPException(409, f"厂商音色已经导入：{provider_voice_id}")
 
         created_ids = []
-        for item, provider_voice_id, display_name, public_name in normalized:
+        for item, provider_voice_id, display_name, public_name, account, project_name in normalized:
             voice_id = "voice_" + uuid.uuid4().hex[:10]
             created_ids.append(voice_id)
             connection.execute(
-                "INSERT INTO voices (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,preview_asset) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO voices
+                   (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,preview_asset,provider_account_id,provider_project_name)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     voice_id,
                     item.provider,
@@ -1253,6 +1754,8 @@ async def import_voices(body: ImportVoicesBody):
                     json.dumps(item.languages, ensure_ascii=False),
                     now(),
                     None,
+                    account["id"] if account else None,
+                    project_name if account else None,
                 ),
             )
     voices_by_id = {item["id"]: item for item in list_voices()}
@@ -1298,7 +1801,11 @@ def rename_voice(voice_id: str, body: RenameVoiceBody):
 
 
 @app.post("/api/voices/clone")
-async def clone_voice(provider_name: str, model_id: str, display_name: str, public_name: str, audio: UploadFile = File(...)):
+async def clone_voice(provider_name: str, model_id: str, display_name: str, public_name: str,
+                      speaker_id: str | None = None, provider_account_id: str | None = None,
+                      provider_project_name: str | None = None,
+                      clone_language: int = 0,
+                      audio: UploadFile = File(...)):
     model = resolve_model(f"{provider_name}/{model_id}")
     if not model:
         raise HTTPException(400, "所选克隆模型不存在")
@@ -1317,6 +1824,15 @@ async def clone_voice(provider_name: str, model_id: str, display_name: str, publ
         raise HTTPException(400, "千问声音复刻仅支持 WAV、MP3 或 M4A")
     if provider_name == "volcengine" and suffix not in {".wav", ".mp3", ".ogg", ".m4a", ".aac", ".pcm"}:
         raise HTTPException(400, "火山引擎声音复刻仅支持 WAV、MP3、OGG、M4A、AAC 或 PCM")
+    volcengine_speaker_id = (speaker_id or "").strip()
+    if provider_name == "volcengine" and (
+        not volcengine_speaker_id.startswith("S_")
+        or len(volcengine_speaker_id) <= 2
+        or len(volcengine_speaker_id) > 200
+    ):
+        raise HTTPException(400, "火山引擎声音复刻需要填写控制台中的 S_ 开头音色槽位 ID")
+    if provider_name == "volcengine" and clone_language not in VOLCENGINE_CLONE_LANGUAGES:
+        raise HTTPException(400, "火山引擎不支持所选参考音频语言")
     if provider_name == "minimax" and suffix not in {".wav", ".mp3", ".m4a"}:
         raise HTTPException(400, "MiniMax 声音复刻仅支持 WAV、MP3 或 M4A")
     with db() as connection:
@@ -1327,6 +1843,7 @@ async def clone_voice(provider_name: str, model_id: str, display_name: str, publ
     provider_voice_id = "reference_" + uuid.uuid4().hex[:8]
     asset_path: str | None = None
     clone_result: dict[str, Any] | None = None
+    account = None
     if provider_name == "dashscope":
         mime_types = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
         try:
@@ -1344,10 +1861,30 @@ async def clone_voice(provider_name: str, model_id: str, display_name: str, publ
             raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
     elif provider_name == "volcengine":
         try:
-            adapter = provider_for("volcengine")
+            account = provider_account_for(
+                "volcengine",
+                provider_account_id,
+                require_explicit=True,
+            )
+            project_name = provider_project_name.strip() if provider_project_name else account["account_ref"] or ""
+            if not project_name:
+                raise ProviderError("请先选择火山项目", code="volcengine_project_not_configured", status=409)
+            with db() as connection:
+                project = connection.execute(
+                    "SELECT 1 FROM provider_projects WHERE provider_account_id=? AND project_name=?",
+                    (account["id"], project_name),
+                ).fetchone()
+            if not project:
+                raise ProviderError("所选火山项目不存在，请先同步项目列表", code="volcengine_project_not_found", status=409)
+            adapter = provider_for("volcengine", account["id"], project_name)
             if not isinstance(adapter, VolcengineProvider):
                 raise ProviderError("火山引擎适配器不可用", code="provider_not_configured", status=409)
-            clone_result = await adapter.clone_voice(raw, suffix.lstrip("."))
+            clone_result = await adapter.clone_voice(
+                raw,
+                suffix.lstrip("."),
+                volcengine_speaker_id,
+                clone_language,
+            )
             provider_voice_id = clone_result["voice_id"]
         except ProviderError as exc:
             raise HTTPException(exc.status, detail={"message": str(exc), "code": exc.code}) from exc
@@ -1369,8 +1906,29 @@ async def clone_voice(provider_name: str, model_id: str, display_name: str, publ
     voice_id = "voice_" + uuid.uuid4().hex[:10]
     with db() as connection:
         connection.execute(
-            "INSERT INTO voices (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,preview_asset) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (voice_id, provider_name, model_id, provider_voice_id, display_name, public_name, "cloned", "active", json.dumps(model.languages, ensure_ascii=False), now(), asset_path),
+            """INSERT INTO voices
+               (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,preview_asset,provider_account_id,provider_project_name)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                voice_id,
+                provider_name,
+                model_id,
+                provider_voice_id,
+                display_name,
+                public_name,
+                "cloned",
+                "active",
+                json.dumps(
+                    [VOLCENGINE_CLONE_LANGUAGES[clone_language]]
+                    if provider_name == "volcengine"
+                    else model.languages,
+                    ensure_ascii=False,
+                ),
+                now(),
+                asset_path,
+                account["id"] if account else None,
+                (project_name or "") if account else None,
+            ),
         )
     if provider_name == "dashscope":
         message = "千问远端克隆音色已创建，可直接使用所选模型合成。"
@@ -1553,7 +2111,11 @@ async def openai_speech(body: SynthesisBody):
     wav_path = AUDIO / f"{job_id}.wav"
     design_instructions = body.instructions or (resolved_voice["design_prompt"] if "design" in model.operations else None)
     try:
-        adapter = demo_provider if model.mode == "demo" else provider_for(model.provider)
+        adapter = demo_provider if model.mode == "demo" else provider_for(
+            model.provider,
+            resolved_voice["provider_account_id"],
+            resolved_voice["provider_project_name"],
+        )
         provider_voice = voice_payload(model, resolved_voice, voice_id)
         result = await adapter.synthesize(SynthesisRequest(resolved_model, provider_voice, body.input, body.speed, "wav", design_instructions), wav_path)
         wav_info = audio_metadata(wav_path)
@@ -1859,7 +2421,11 @@ async def openai_speech_stream(body: StreamingSynthesisBody):
         )
         return error(f"音色 {voice_id} 与模型 {model_id} 不兼容", code="invalid_voice_scope")
     try:
-        adapter = demo_provider if model.mode == "demo" else provider_for(model.provider)
+        adapter = demo_provider if model.mode == "demo" else provider_for(
+            model.provider,
+            resolved_voice["provider_account_id"],
+            resolved_voice["provider_project_name"],
+        )
     except ProviderError as exc:
         record_gateway_request(
             request_id=request_id, endpoint="speech/stream", status="failed", status_code=exc.status,

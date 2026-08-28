@@ -6,6 +6,7 @@ import keyring
 
 
 SERVICE_NAME = "VoiceStudio.ProviderAccount"
+PROJECT_SERVICE_NAME = "VoiceStudio.ProviderProject"
 ENV_MODE = "env"
 ENV_PROVIDER_KEYS = {
     "dashscope": "VOICE_STUDIO_DASHSCOPE_API_KEY",
@@ -109,6 +110,39 @@ def delete_api_key(account_id: str) -> None:
             keyring.delete_password(SERVICE_NAME, account_id)
     except Exception as exc:
         raise CredentialStoreError(f"无法删除{credential_store_name()}凭据") from exc
+
+
+def _project_credential_id(account_id: str, project_name: str) -> str:
+    return f"{account_id}:{project_name}"
+
+
+def save_project_api_key(account_id: str, project_name: str, api_key: str) -> None:
+    if environment_account_provider(account_id):
+        raise CredentialStoreError("Docker 环境变量模式暂不支持自动保存项目级 API Key")
+    try:
+        keyring.set_password(PROJECT_SERVICE_NAME, _project_credential_id(account_id, project_name), api_key)
+    except Exception as exc:
+        raise CredentialStoreError(f"无法写入{credential_store_name()}中的项目凭据") from exc
+
+
+def load_project_api_key(account_id: str, project_name: str) -> str | None:
+    if environment_account_provider(account_id):
+        return None
+    try:
+        return keyring.get_password(PROJECT_SERVICE_NAME, _project_credential_id(account_id, project_name))
+    except Exception as exc:
+        raise CredentialStoreError(f"无法读取{credential_store_name()}中的项目凭据") from exc
+
+
+def delete_project_api_key(account_id: str, project_name: str) -> None:
+    if environment_account_provider(account_id):
+        return
+    credential_id = _project_credential_id(account_id, project_name)
+    try:
+        if keyring.get_password(PROJECT_SERVICE_NAME, credential_id) is not None:
+            keyring.delete_password(PROJECT_SERVICE_NAME, credential_id)
+    except Exception as exc:
+        raise CredentialStoreError(f"无法删除{credential_store_name()}中的项目凭据") from exc
 
 
 def credential_store_status() -> dict[str, str | bool]:

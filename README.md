@@ -45,6 +45,7 @@ API Key、音频、任务历史和音色信息默认保存在本机，不会上�
 2. 将压缩包完整解压到有写入权限的普通文件夹，不要直接在压缩包预览窗口中运行。
 3. 双击 `启动 Voice Studio.bat`。
 4. 浏览器打开启动器显示的地址，默认是 `http://127.0.0.1:8765`。
+5. 使用完毕后双击 `停止 Voice Studio.bat`；它会自动识别并停止 Voice Studio 使用的本地端口。
 
 便携版包含运行所需的 Python、后端依赖、前端文件、FFmpeg 和 FFprobe。数据库、音频和网关配置保存在程序目录的 `data` 文件夹中。升级时请保留这个文件夹。
 
@@ -52,7 +53,7 @@ API Key、音频、任务历史和音色信息默认保存在本机，不会上�
 
 ### Windows 轻量版
 
-在 Releases 下载 `Voice-Studio-*-Windows.zip` 并完整解压，安装 Python 3.11+ 和 FFmpeg 后，双击 `启动 Voice Studio.bat`。轻量版已包含预构建前端，通常不需要安装 Node.js。
+在 Releases 下载 `Voice-Studio-*-Windows.zip` 并完整解压，安装 Python 3.11+ 和 FFmpeg 后，双击 `启动 Voice Studio.bat`。使用完毕后可双击 `停止 Voice Studio.bat`。轻量版已包含预构建前端，通常不需要安装 Node.js。
 
 ### Windows 源码启动
 
@@ -174,11 +175,11 @@ Docker 可用变量：
 | `VOICE_STUDIO_VOLCENGINE_API_KEY` | 火山引擎语音 API Key |
 | `VOICE_STUDIO_VOLCENGINE_OPENAPI_ACCESS_KEY` | 火山引擎云端音色同步 Access Key |
 | `VOICE_STUDIO_VOLCENGINE_OPENAPI_SECRET_KEY` | 火山引擎云端音色同步 Secret Key |
-| `VOICE_STUDIO_VOLCENGINE_PROJECT_NAME` | 火山引擎项目名称 |
+| `VOICE_STUDIO_VOLCENGINE_PROJECT_NAME` | 火山引擎默认项目名称（可选；桌面版可在设置中同步并管理多个项目） |
 | `VOICE_STUDIO_MINIMAX_API_KEY` | MiniMax API Key |
 | `VOICE_STUDIO_MIMO_API_KEY` | 小米 MiMo API Key |
 
-火山引擎的语音 API Key 与云端音色同步使用的 Access Key/Secret Key 是两组不同凭据。不使用云端音色同步时，后两项可以留空。`.env` 只保存在本机，不要提交到 GitHub。
+火山引擎的语音 API Key 与云端音色同步使用的 Access Key/Secret Key 是两组不同凭据。不使用云端音色同步时，后两项可以留空。桌面版只需配置一套火山凭据，然后在 **设置 → 火山引擎 → 项目** 中点击“同步项目与密钥”；程序会用 AK/SK 读取每个项目已有的语音 API Key，并将密钥本体保存到系统密钥环。之后声音克隆、云端音色同步和空槽位查询都会按所选项目执行，不需要为每个项目重复添加账号。没有 IAM 项目读取权限时，也可以手动添加 `ProjectName`，但需要在控制台为该项目创建 API Key 后再同步。`.env` 只保存在本机，不要提交到 GitHub。
 
 ## OpenAI 兼容 API
 

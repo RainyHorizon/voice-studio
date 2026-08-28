@@ -25,6 +25,143 @@ def isolated_storage(main):
 
 
 class GatewayEndpointTests(unittest.TestCase):
+    def test_volcengine_provider_uses_project_api_key_and_rejects_cross_project_fallback(self):
+        from app import main
+        from app.providers.volcengine import VolcengineProvider
+
+        with isolated_storage(main):
+            timestamp = main.now()
+            with main.db() as connection:
+                connection.execute(
+                    "INSERT INTO provider_accounts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("pa_volc", "volcengine", "火山", "default", None, None, "active", "••••base", "", "", timestamp, timestamp, timestamp),
+                )
+                connection.execute(
+                    """INSERT INTO provider_projects
+                       (id,provider_account_id,project_name,display_name,status,has_permission,source,created_at,updated_at,last_synced_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    ("pp_astrbot", "pa_volc", "astrbot", "Astrbot", "active", 1, "remote", timestamp, timestamp, timestamp),
+                )
+            with patch.object(main, "load_api_key", return_value="default-key"), \
+                patch.object(main, "load_provider_credentials", return_value={"openapi_access_key": "ak", "openapi_secret_key": "sk"}), \
+                patch.object(main, "load_project_api_key", return_value="astrbot-key"):
+                adapter = main.provider_for("volcengine", "pa_volc", "astrbot")
+            self.assertIsInstance(adapter, VolcengineProvider)
+            self.assertEqual(adapter.api_key, "astrbot-key")
+
+            with patch.object(main, "load_api_key", return_value="default-key"), \
+                patch.object(main, "load_provider_credentials", return_value={"openapi_access_key": "ak", "openapi_secret_key": "sk"}), \
+                patch.object(main, "load_project_api_key", return_value=None):
+                with self.assertRaisesRegex(Exception, "没有已同步的语音 API Key"):
+                    main.provider_for("volcengine", "pa_volc", "astrbot")
+
+    def test_volcengine_clone_requires_and_forwards_speaker_slot(self):
+        from app import main
+        from app.providers.volcengine import VolcengineProvider
+
+        async def run():
+            adapter = VolcengineProvider("test-key")
+            with isolated_storage(main), patch.object(main, "provider_for", return_value=adapter), \
+                patch.object(
+                    adapter,
+                    "clone_voice",
+                    return_value={"voice_id": "S_assigned123", "request_id": "clone-log", "preview_url": None},
+                ) as clone:
+                with main.db() as connection:
+                    timestamp = main.now()
+                    connection.executemany(
+                        "INSERT INTO provider_accounts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        [
+                            ("pa_volc_default", "volcengine", "默认项目", "default", None, None, "active", "••••test", "remote_auth", "", timestamp, timestamp, timestamp),
+                            ("pa_volc_astrbot", "volcengine", "Astrbot 项目", "astrbot", None, None, "configured", "••••test", "remote_auth", "", timestamp, timestamp, None),
+                        ],
+                    )
+                transport = httpx.ASGITransport(app=main.app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    query = {
+                        "provider_name": "volcengine",
+                        "model_id": "seed-icl-2.0",
+                        "display_name": "测试音色",
+                        "public_name": "volc-clone-test",
+                    }
+                    missing = await client.post(
+                        "/api/voices/clone",
+                        params=query,
+                        files={"audio": ("sample.wav", b"voice-sample", "audio/wav")},
+                    )
+                    created = await client.post(
+                        "/api/voices/clone",
+                        params={
+                            **query,
+                            "speaker_id": " S_assigned123 ",
+                            "provider_account_id": "pa_volc_astrbot",
+                            "clone_language": 2,
+                        },
+                        files={"audio": ("sample.wav", b"voice-sample", "audio/wav")},
+                    )
+                    ambiguous = await client.post(
+                        "/api/voices/clone",
+                        params={**query, "public_name": "volc-clone-ambiguous", "speaker_id": "S_other"},
+                        files={"audio": ("sample.wav", b"voice-sample", "audio/wav")},
+                    )
+
+            self.assertEqual(missing.status_code, 400)
+            self.assertIn("S_", missing.json()["error"]["message"])
+            self.assertEqual(created.status_code, 200)
+            self.assertEqual(created.json()["voice"]["provider_voice_id"], "S_assigned123")
+            self.assertEqual(created.json()["voice"]["provider_account_id"], "pa_volc_astrbot")
+            self.assertEqual(created.json()["voice"]["provider_project_name"], "astrbot")
+            self.assertEqual(created.json()["voice"]["languages"], ["ja-JP"])
+            self.assertEqual(ambiguous.status_code, 409)
+            self.assertEqual(ambiguous.json()["error"]["code"], "provider_account_required")
+            clone.assert_awaited_once_with(b"voice-sample", "wav", "S_assigned123", 2)
+
+        asyncio.run(run())
+
+    def test_synthesis_reuses_the_account_bound_to_a_cloned_voice(self):
+        with patch.dict(os.environ, {"VOICE_STUDIO_GATEWAY_KEY": "test_gateway_key"}, clear=False):
+            from app import main
+
+            async def run():
+                with isolated_storage(main):
+                    with main.db() as connection:
+                        connection.execute(
+                            """INSERT INTO voices
+                               (id,provider,model_id,provider_voice_id,display_name,public_name,voice_type,status,languages,created_at,provider_account_id,provider_project_name)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (
+                                "voice_bound",
+                                "volcengine",
+                                "seed-icl-2.0",
+                                "S_bound",
+                                "项目音色",
+                                "project-voice",
+                                "cloned",
+                                "active",
+                                '["zh-CN"]',
+                                main.now(),
+                                "pa_volc_astrbot",
+                                "astrbot",
+                            ),
+                        )
+                    transport = httpx.ASGITransport(app=main.app)
+                    with patch.object(main, "provider_for", return_value=main.demo_provider) as provider_factory:
+                        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                            response = await client.post(
+                                "/v1/audio/speech",
+                                headers={"Authorization": "Bearer test_gateway_key"},
+                                json={
+                                    "model": "volcengine/seed-icl-2.0",
+                                    "voice": "project-voice",
+                                    "input": "项目绑定测试",
+                                    "response_format": "wav",
+                                },
+                            )
+                self.assertEqual(response.status_code, 200)
+                provider_factory.assert_called_once_with("volcengine", "pa_volc_astrbot", "astrbot")
+
+            asyncio.run(run())
+
     def test_open_storage_directory_uses_platform_opener_or_returns_headless_path(self):
         from app import main
 
